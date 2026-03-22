@@ -92,3 +92,7 @@ The callback function is automatically registered, assigned an ID, and a proxy r
 2.  **Instruction Protocol**: Operations (get, apply, etc.) are serialized into `ProxyInstructions` using `@msgpack/msgpack`.
 3.  **Transport**: Uses `yamux-js` to multiplex concurrent operations over a single connection (TCP, WebSocket, stdio, etc.).
 4.  **Reference Management**: A shared `ObjectRegistry` tracks local objects passed by reference. `FinalizationRegistry` detects when a remote proxy is unused and sends `release` instructions to free memory.
+
+## License
+
+MIT
