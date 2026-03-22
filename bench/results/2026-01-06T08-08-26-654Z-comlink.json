@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-01-06T08:08:26.654Z",
+  "adapter": "comlink",
+  "iterations": 1000,
+  "warmup": 100,
+  "payloadBytes": 4096,
+  "node": "v24.11.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scenarios": [
+    {
+      "name": "callNoArgs",
+      "totalMs": 16.255000000000003,
+      "avgMs": 0.016255000000000002,
+      "ops": 61519.53245155336
+    },
+    {
+      "name": "callSmallArgs",
+      "totalMs": 14.745583000000003,
+      "avgMs": 0.014745583000000003,
+      "ops": 67816.91846297294
+    },
+    {
+      "name": "callLargePayload",
+      "totalMs": 16.640042000000008,
+      "avgMs": 0.016640042000000008,
+      "ops": 60096.00216153298
+    },
+    {
+      "name": "callbackRoundtrip",
+      "totalMs": 55.574625,
+      "avgMs": 0.055574624999999996,
+      "ops": 17993.82362004242
+    }
+  ]
+}

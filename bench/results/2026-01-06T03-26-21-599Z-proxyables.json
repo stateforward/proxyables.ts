@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-01-06T03:26:21.599Z",
+  "adapter": "proxyables",
+  "iterations": 50,
+  "warmup": 5,
+  "payloadBytes": 4096,
+  "node": "v24.11.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scenarios": [
+    {
+      "name": "callbackRoundtrip",
+      "totalMs": 23.646666999999994,
+      "avgMs": 0.47293333999999987,
+      "ops": 2114.4628966103346
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-01-06T03:29:28.627Z",
+  "adapter": "proxyables",
+  "iterations": 1,
+  "warmup": 0,
+  "payloadBytes": 4096,
+  "node": "v24.11.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scenarios": [
+    {
+      "name": "callNoArgs",
+      "totalMs": 2.4652090000000015,
+      "avgMs": 2.4652090000000015,
+      "ops": 405.64511974441086
+    }
+  ]
+}

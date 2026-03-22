@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-01-06T03:19:03.826Z",
+  "adapter": "node-ipc",
+  "iterations": 1000,
+  "warmup": 100,
+  "payloadBytes": 4096,
+  "node": "v24.11.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scenarios": [
+    {
+      "name": "callNoArgs",
+      "totalMs": 17.57304099999999,
+      "avgMs": 0.01757304099999999,
+      "ops": 56905.34723045377
+    },
+    {
+      "name": "callSmallArgs",
+      "totalMs": 15.260167000000024,
+      "avgMs": 0.015260167000000024,
+      "ops": 65530.08233789305
+    },
+    {
+      "name": "callLargePayload",
+      "totalMs": 23.257874999999984,
+      "avgMs": 0.023257874999999983,
+      "ops": 42996.1894627089
+    },
+    {
+      "name": "callbackRoundtrip",
+      "totalMs": 14.242458999999997,
+      "avgMs": 0.014242458999999997,
+      "ops": 70212.59460883828
+    }
+  ]
+}

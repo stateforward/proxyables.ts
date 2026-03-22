@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-01-06T08:07:38.292Z",
+  "adapter": "proxyables-no-pool",
+  "iterations": 1000,
+  "warmup": 100,
+  "payloadBytes": 4096,
+  "node": "v24.11.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scenarios": [
+    {
+      "name": "callNoArgs",
+      "totalMs": 128.12758300000002,
+      "avgMs": 0.12812758300000002,
+      "ops": 7804.720705611062
+    },
+    {
+      "name": "callSmallArgs",
+      "totalMs": 123.51045800000003,
+      "avgMs": 0.12351045800000003,
+      "ops": 8096.480380633029
+    },
+    {
+      "name": "callLargePayload",
+      "totalMs": 140.056333,
+      "avgMs": 0.140056333,
+      "ops": 7139.984166228314
+    },
+    {
+      "name": "callbackRoundtrip",
+      "totalMs": 329.36812499999996,
+      "avgMs": 0.32936812499999996,
+      "ops": 3036.1165033805264
+    }
+  ]
+}

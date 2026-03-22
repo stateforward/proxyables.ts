@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-01-06T08:08:28.561Z",
+  "adapter": "rpc-websockets",
+  "iterations": 1000,
+  "warmup": 100,
+  "payloadBytes": 4096,
+  "node": "v24.11.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scenarios": [
+    {
+      "name": "callNoArgs",
+      "totalMs": 41.45854199999985,
+      "avgMs": 0.041458541999999855,
+      "ops": 24120.481612691627
+    },
+    {
+      "name": "callSmallArgs",
+      "totalMs": 40.87633299999993,
+      "avgMs": 0.04087633299999993,
+      "ops": 24464.033992481705
+    },
+    {
+      "name": "callLargePayload",
+      "totalMs": 56.58979199999999,
+      "avgMs": 0.056589791999999986,
+      "ops": 17671.03155282847
+    },
+    {
+      "name": "callbackRoundtrip",
+      "totalMs": 28.979749999999967,
+      "avgMs": 0.028979749999999967,
+      "ops": 34506.85392386067
+    }
+  ]
+}

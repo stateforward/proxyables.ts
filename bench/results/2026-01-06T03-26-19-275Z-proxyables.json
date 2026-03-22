@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-01-06T03:26:19.275Z",
+  "adapter": "proxyables",
+  "iterations": 50,
+  "warmup": 5,
+  "payloadBytes": 4096,
+  "node": "v24.11.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scenarios": [
+    {
+      "name": "callSmallArgs",
+      "totalMs": 11.857750000000003,
+      "avgMs": 0.23715500000000006,
+      "ops": 4216.651556998587
+    }
+  ]
+}

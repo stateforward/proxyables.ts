@@ -1,0 +1,35 @@
+{
+  "name": "proxyables",
+  "version": "0.0.1",
+  "description": "",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "test": "NODE_OPTIONS='--expose-gc' vitest",
+    "bench": "npm run build && node bench/bench.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@node-ipc/node-ipc": "^11.0.3",
+    "@sinclair/typebox": "^0.33.17",
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "comlink": "^4.4.1",
+    "pino-caller": "^3.4.0",
+    "pino-pretty": "^11.3.0",
+    "rpc-websockets": "^4.1.2",
+    "source-map-support": "^0.5.21",
+    "threads": "^1.7.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.3",
+    "workerpool": "^6.4.4"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.0-beta2",
+    "pino": "^9.5.0",
+    "yamux-js": "github:gabewillen/yamux-js"
+  }
+}
