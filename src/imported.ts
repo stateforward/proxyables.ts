@@ -326,37 +326,65 @@ export function createImportedProxyable<TObject extends object>({
   stream,
   decoder,
   encoder,
+  objectRegistry = new ObjectRegistry(),
   streamPoolSize = 8,
   streamPoolReuse = true,
 }: {
   stream: Duplex;
   decoder?: ProxyInstructionDecoder;
   encoder?: ProxyInstructionEncoder;
+  objectRegistry?: ObjectRegistry;
   streamPoolSize?: number;
   streamPoolReuse?: boolean;
 }): ProxyableImport<TObject> {
   const client = new Client();
   const { decode } = decoder ?? createDecoder();
   const { encode } = encoder ?? createEncoder();
+  let transportClosed = false;
 
   stream.pipe(client as any).pipe(stream);
-  
-  const objectRegistry = new ObjectRegistry();
+  stream.on("close", () => {
+    transportClosed = true;
+  });
+  stream.on("error", () => {
+    transportClosed = true;
+  });
 
   const registry = new FinalizationRegistry((heldValue: { refId: string }) => {
+     if (transportClosed) {
+         return;
+     }
      try {
-         const substream = client.open();
+         const substream = client.open() as any;
+         let responseBuffer = Buffer.alloc(0);
+         const cleanup = () => {
+             substream.removeAllListeners("data");
+             substream.removeAllListeners("error");
+             substream.removeAllListeners("close");
+             substream.destroy();
+         };
+         substream.on("data", (chunk: Buffer | Uint8Array) => {
+             responseBuffer = Buffer.concat([responseBuffer, Buffer.from(chunk)]);
+             const instruction = tryDecodeInstruction(decode, responseBuffer, [
+               ProxyInstructionKinds.throw,
+               ProxyInstructionKinds.return,
+             ]);
+             if (!instruction) {
+               return;
+             }
+             cleanup();
+         });
+         substream.on("error", () => {
+             cleanup();
+         });
+         substream.on("close", () => {
+             cleanup();
+         });
          const instruction = createReleaseInstruction(heldValue.refId);
          const bytes = encode(instruction);
          (substream as any).write(Buffer.from(bytes));
-                         if (typeof (substream as any).close === "function") {
-                             (substream as any).close();
-                         } else {
-                             (substream as any).end();
-                         }
      } catch(e) {
-         // log.error({ error: e }, "failed to release reference");
-         console.error("failed to release reference", e);
+         // Swallow finalizer release errors once the transport is going away.
      }
   });
 

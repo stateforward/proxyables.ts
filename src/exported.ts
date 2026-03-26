@@ -318,14 +318,18 @@ export function createExportedProxyable<TObject extends object>(parameters: {
       encode,
       [ProxyInstructionKinds.execute]: async (
         data: ProxyExecuteInstruction["data"],
-        stack: ProxyInstruction[] = []
+        stack: unknown[] = []
       ): Promise<ProxyExecuteResult> => {
         log.info({ data }, `executing instructions`);
         
         // Execute Instructions.
         for (const instruction of data) {
            if (instruction.kind === ProxyValueKinds.Reference) {
-               stack.push(instruction);
+               const registered = registry.get(instruction.data as string);
+               if (!registered) {
+                 return [createHandlerError(`missing reference: ${String(instruction.data)}`)];
+               }
+               stack.push(registered);
                continue;
            }
 
@@ -335,37 +339,23 @@ export function createExportedProxyable<TObject extends object>(parameters: {
             continue;
           }
            
-           // Resolve target from stack?
-           // If stack is not empty, use top as target IF it is a Reference.
            let currentTarget: any = object; // Default root
            if (stack.length > 0) {
-              const previous = stack[stack.length - 1]; // Peek
-              if (previous.kind === ProxyValueKinds.Reference) {
-                  const refId = previous.data as string;
-                  const registered = registry.get(refId);
-                  if (registered) {
-                      currentTarget = registered;
-                      // Should we Pop the target? 
-                      // If `get` consumes the target, yes.
-                      // Instructions like `get` usually operate on a subject.
-                      // Let's assume `get` consumes the subject from stack.
-                      stack.pop(); 
-                  }
-              }
+              currentTarget = stack.pop();
            }
            
-          const [error, result] = await operation(instruction.data as any, stack, currentTarget);
+          const [error, result] = await operation(instruction.data as any, stack as any, currentTarget);
           if (error) {
             return [error];
           }
-          stack.push(result as ProxyInstruction);
+          stack.push(result);
         }
         
-        const result = stack.shift();
-        if (!result) {
+        if (stack.length === 0) {
           return [createHandlerError("no result")];
         }
-        return [null, createReturnInstruction(result as any)];
+        const result = stack.pop();
+        return [null, createReturnInstruction(createValue(result) as any)];
       },
       [ProxyInstructionKinds.get]: async (
         data: ProxyGetInstruction["data"],
@@ -400,7 +390,7 @@ export function createExportedProxyable<TObject extends object>(parameters: {
                 // Ignore binding errors (e.g. if not bindable)
             }
         }
-        return [null, createValue(val)];
+        return [null, val];
       },
       [ProxyInstructionKinds.apply]: async (
         data: any, // [string, args] ??
@@ -479,7 +469,7 @@ export function createExportedProxyable<TObject extends object>(parameters: {
 
          if (typeof target === 'function') {
              const result = await Reflect.apply(target, object, args); 
-             return [null, createValue(result)];
+             return [null, result];
          }
          return [createHandlerError("target is not a function")];
       },
@@ -531,7 +521,7 @@ export function createExportedProxyable<TObject extends object>(parameters: {
 
          if (typeof target === 'function') { // constructor
              const result = Reflect.construct(target, args);
-             return [null, createValue(result)];
+             return [null, result];
          }
          return [createHandlerError("target is not a constructor")];
       },
@@ -542,7 +532,7 @@ export function createExportedProxyable<TObject extends object>(parameters: {
           const [refId] = data;
           log.info({ refId }, "releasing object reference");
           registry.delete(refId);
-          return [null, createValue(undefined)];
+          return [null, undefined];
       },
       
       eval: async (

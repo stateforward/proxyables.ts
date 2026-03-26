@@ -1,5 +1,10 @@
 import { make as muid } from "./muid";
 
+export type ObjectRegistrySnapshot = {
+  entries: number;
+  retains: number;
+};
+
 export class ObjectRegistry {
   private map = new Map<string, object>();
   private counts = new Map<string, number>();
@@ -40,6 +45,17 @@ export class ObjectRegistry {
 
   get size() {
     return this.map.size;
+  }
+
+  snapshot(): ObjectRegistrySnapshot {
+    let retains = 0;
+    for (const count of this.counts.values()) {
+      retains += count;
+    }
+    return {
+      entries: this.map.size,
+      retains,
+    };
   }
 
   debug() {
