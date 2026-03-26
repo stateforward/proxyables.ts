@@ -4,17 +4,45 @@
 const net = require("node:net");
 
 const PROTOCOL = "parity-json-v1";
-const CAPABILITIES = [
-  "get_scalars",
-  "call_add",
-  "nested_object_access",
-  "construct_greeter",
-  "callback_roundtrip",
-  "object_argument_roundtrip",
-  "error_propagation",
-  "shared_reference_consistency",
-  "explicit_release",
+const CANONICAL_SCENARIOS = [
+  "GetScalars",
+  "CallAdd",
+  "NestedObjectAccess",
+  "ConstructGreeter",
+  "CallbackRoundtrip",
+  "ObjectArgumentRoundtrip",
+  "ErrorPropagation",
+  "SharedReferenceConsistency",
+  "ExplicitRelease",
 ];
+const CAPABILITIES = [
+  ...CANONICAL_SCENARIOS,
+];
+const CAPABILITY_SET = new Set(CAPABILITIES);
+
+const WORD_BOUNDARY = /[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g;
+
+function toPascalCase(raw) {
+  const matches = String(raw).match(WORD_BOUNDARY);
+  if (!matches || matches.length === 0) {
+    return String(raw)
+      .split(/[^a-zA-Z0-9]+/)
+      .filter(Boolean)
+      .map((item) => `${item[0]?.toUpperCase()}${item.slice(1)}`)
+      .join("");
+  }
+  return matches
+    .map((item) => `${item[0]?.toUpperCase()}${item.slice(1).toLowerCase()}`)
+    .join("");
+}
+
+function normalizeScenario(raw) {
+  const canonical = toPascalCase(raw);
+  if (CAPABILITY_SET.has(canonical)) {
+    return canonical;
+  }
+  return "";
+}
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -98,8 +126,13 @@ function parseScenarios(raw) {
 }
 
 function runScenario(fixture, scenario) {
-  switch (scenario) {
-    case "get_scalars": {
+  const normalized = normalizeScenario(scenario);
+  if (!normalized) {
+    throw new Error(`unknown scenario: ${scenario}`);
+  }
+
+  switch (normalized) {
+    case "GetScalars": {
       return {
         intValue: fixture.intValue,
         boolValue: fixture.boolValue,
@@ -107,22 +140,22 @@ function runScenario(fixture, scenario) {
         nullValue: fixture.nullValue,
       };
     }
-    case "call_add":
+    case "CallAdd":
       return fixture.add(20, 22);
-    case "nested_object_access": {
+    case "NestedObjectAccess": {
       const nested = fixture.nested;
       return {
         label: nested.label,
         pong: nested.ping(),
       };
     }
-    case "construct_greeter": {
+    case "ConstructGreeter": {
       const greeter = new fixture.Greeter("Hello");
       return greeter.greet("World");
     }
-    case "callback_roundtrip":
+    case "CallbackRoundtrip":
       return fixture.runCallback((value) => `callback:${value}`, "value");
-    case "object_argument_roundtrip":
+    case "ObjectArgumentRoundtrip":
       return fixture.useHelper(
         {
           greet(name) {
@@ -131,7 +164,7 @@ function runScenario(fixture, scenario) {
         },
         "Ada"
       );
-    case "error_propagation": {
+    case "ErrorPropagation": {
       try {
         fixture.explode();
       } catch (error) {
@@ -139,7 +172,7 @@ function runScenario(fixture, scenario) {
       }
       throw new Error("expected failure");
     }
-    case "shared_reference_consistency": {
+    case "SharedReferenceConsistency": {
       const first = fixture.getShared();
       const second = fixture.getShared();
       return {
@@ -149,7 +182,7 @@ function runScenario(fixture, scenario) {
         secondValue: second.value,
       };
     }
-    case "explicit_release": {
+    case "ExplicitRelease": {
       const before = fixture.debugStats();
       const first = fixture.acquireShared();
       const second = fixture.acquireShared();
@@ -201,7 +234,8 @@ async function runServe(args) {
     const handle = () => {
       const scenarios = parseScenarios(request);
       for (const scenario of scenarios) {
-        if (!CAPABILITIES.includes(scenario)) {
+        const canonical = normalizeScenario(scenario);
+        if (!canonical) {
           sendLine({
             type: "scenario",
             scenario,
@@ -212,10 +246,10 @@ async function runServe(args) {
           continue;
         }
         try {
-          const actual = runScenario(fixture, scenario);
+          const actual = runScenario(fixture, canonical);
           sendLine({
             type: "scenario",
-            scenario,
+            scenario: canonical,
             status: "passed",
             protocol: PROTOCOL,
             actual,
@@ -223,7 +257,7 @@ async function runServe(args) {
         } catch (error) {
           sendLine({
             type: "scenario",
-            scenario,
+            scenario: canonical,
             status: "failed",
             protocol: PROTOCOL,
             message: error.message,
@@ -267,7 +301,7 @@ async function runServe(args) {
 }
 
 async function runDrive(args) {
-  const scenarios = parseScenarios(args.scenarios);
+  const scenarios = parseScenarios(args.scenarios).map((scenario) => normalizeScenario(scenario) || scenario);
   const socket = await connect(args.host, args.port);
   const responses = [];
 
