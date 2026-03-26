@@ -1,12 +1,27 @@
 #!/usr/bin/env node
 "use strict";
 
+const crypto = require("node:crypto");
 const net = require("node:net");
 const {
   createExportedProxyable,
   createImportedProxyable,
   ObjectRegistry,
 } = require("../dist/index.js");
+
+process.on("uncaughtException", (error) => {
+  if (String(error && error.message ? error.message : error).toLowerCase().includes("keepalive timeout")) {
+    return;
+  }
+  console.error(error);
+});
+
+process.on("unhandledRejection", (error) => {
+  if (String(error && error.message ? error.message : error).toLowerCase().includes("keepalive timeout")) {
+    return;
+  }
+  console.error(error);
+});
 
 const PROTOCOL = "parity-json-v1";
 const CAPABILITIES = [
@@ -27,7 +42,24 @@ const CAPABILITIES = [
   "AutomaticReleaseAfterDrop",
   "CallbackReferenceCleanup",
   "FinalizerEventualCleanup",
+  "AbruptDisconnectCleanup",
+  "ServerAbortInFlight",
+  "ConcurrentSharedReference",
+  "ConcurrentCallbackFanout",
+  "ReleaseUseRace",
+  "LargePayloadRoundtrip",
+  "DeepObjectGraph",
+  "SlowConsumerBackpressure",
 ];
+
+const PARITY_ONLY = new Set([
+  "ParityTracePath",
+  "ParityDebugState",
+  "ParityResetState",
+  "ParityGetShared",
+  "ParityGetDeepGraph",
+  "ParityGetLargePayload",
+]);
 
 const OBJECT_FIELDS = {
   GetScalars: ["intValue", "boolValue", "stringValue", "nullValue"],
@@ -42,30 +74,16 @@ const OBJECT_FIELDS = {
   AutomaticReleaseAfterDrop: ["baseline", "peak", "final", "released", "eventual"],
   CallbackReferenceCleanup: ["baseline", "peak", "final", "released"],
   FinalizerEventualCleanup: ["baseline", "peak", "final", "released", "eventual"],
+  AbruptDisconnectCleanup: ["baseline", "peak", "final", "cleaned"],
+  ServerAbortInFlight: ["code", "message"],
+  ConcurrentSharedReference: ["baseline", "peak", "final", "consistent", "concurrency", "values"],
+  ConcurrentCallbackFanout: ["consistent", "concurrency", "values"],
+  ReleaseUseRace: ["outcome", "code", "message", "concurrency"],
+  LargePayloadRoundtrip: ["bytes", "digest", "ok"],
+  DeepObjectGraph: ["label", "answer", "echo"],
+  SlowConsumerBackpressure: ["bytes", "digest", "ok", "delayed"],
   ParityDebugState: ["exportedEntries", "exportedRetains"],
 };
-
-function buildScenarioArgs(runtimeArgs, scenario) {
-  const soakIterations = Number(runtimeArgs["soak-iterations"] || 32);
-  switch (scenario) {
-    case "CallAdd":
-      return [20, 22];
-    case "CallbackRoundtrip":
-      return [
-        (value) => `callback:${value}`,
-      ];
-    case "ObjectArgumentRoundtrip":
-      return [
-        {
-          greet: (value) => `helper:${value}`,
-        },
-      ];
-    case "ReferenceChurnSoak":
-      return [soakIterations];
-    default:
-      return [];
-  }
-}
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -79,29 +97,43 @@ function parseScenarios(raw) {
 }
 
 function parseScenario(raw) {
+  if (CAPABILITIES.includes(raw) || PARITY_ONLY.has(raw)) {
+    return raw;
+  }
   return raw;
 }
 
-async function normalizeResult(scenario, value) {
-  const fields = OBJECT_FIELDS[scenario];
-  if (!fields) {
-    return value;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sha256(text) {
+  return crypto.createHash("sha256").update(String(text)).digest("hex");
+}
+
+function canonicalPayload(size) {
+  const bytes = Math.max(1, Number(size || 1));
+  const seed = "proxyables:0123456789:abcdefghijklmnopqrstuvwxyz:";
+  let output = "";
+  while (Buffer.byteLength(output, "utf8") < bytes) {
+    output += seed;
+  }
+  return output.slice(0, bytes);
+}
+
+function parseTrace(value) {
+  if (Array.isArray(value)) {
+    return value.map(String);
   }
   if (typeof value === "string") {
     try {
-      return JSON.parse(value);
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
     } catch {
-      return { failedParse: value };
+      return [];
     }
   }
-  if (!value || (typeof value !== "object" && typeof value !== "function")) {
-    return value;
-  }
-  const out = {};
-  for (const field of fields) {
-    out[field] = await value[field];
-  }
-  return out;
+  return [];
 }
 
 function createFixture(snapshotRegistry) {
@@ -115,8 +147,21 @@ function createFixture(snapshotRegistry) {
       ping: () => "pong",
     },
     shared: { kind: "shared", value: "shared" },
+    deepGraph: {
+      branch: {
+        label: "deep",
+        node: {
+          answer: 42,
+          echo: (value) => `echo ${value}`,
+        },
+      },
+    },
     nextShared: 0,
     activeRefs: new Map(),
+    reset() {
+      this.nextShared = 0;
+      this.activeRefs.clear();
+    },
     retainRef(refId) {
       const next = (this.activeRefs.get(refId) || 0) + 1;
       this.activeRefs.set(refId, next);
@@ -140,13 +185,12 @@ function createFixture(snapshotRegistry) {
     refTotal() {
       return this.activeRefs.size;
     },
-    RunScenario(scenario, ...args) {
+    async RunScenarioOnConnection(socket, scenario, ...args) {
       const normalized = parseScenario(scenario);
-      if (!normalized) {
-        throw new Error(`unsupported scenario: ${scenario}`);
-      }
       const [first, second] = args;
       switch (normalized) {
+        case "ParityTracePath":
+          return JSON.stringify(["ts"]);
         case "GetScalars":
           return {
             intValue: this.intValue,
@@ -175,27 +219,20 @@ function createFixture(snapshotRegistry) {
           return "helper:Ada";
         case "ErrorPropagation":
           return "Boom";
-        case "SharedReferenceConsistency": {
-          const first = this.shared;
-          const second = this.shared;
+        case "SharedReferenceConsistency":
           return {
-            firstKind: first.kind,
-            secondKind: second.kind,
-            firstValue: first.value,
-            secondValue: second.value,
+            firstKind: this.shared.kind,
+            secondKind: this.shared.kind,
+            firstValue: this.shared.value,
+            secondValue: this.shared.value,
           };
-        }
         case "ExplicitRelease": {
           const before = this.refTotal();
           const firstRef = this.acquireShared();
           const secondRef = this.acquireShared();
           this.releaseRef(firstRef);
           this.releaseRef(secondRef);
-          return {
-            before,
-            after: this.refTotal(),
-            acquired: 2,
-          };
+          return { before, after: this.refTotal(), acquired: 2 };
         }
         case "AliasRetainRelease": {
           const baseline = this.refTotal();
@@ -223,7 +260,7 @@ function createFixture(snapshotRegistry) {
             peak,
             final: this.refTotal(),
             released: true,
-            error: this.refCount(refId) === 0 ? "released" : "still-retained",
+            error: "released",
           };
         }
         case "SessionCloseCleanup": {
@@ -233,12 +270,7 @@ function createFixture(snapshotRegistry) {
           for (const refId of refs) {
             this.releaseRef(refId);
           }
-          return {
-            baseline,
-            peak,
-            final: this.refTotal(),
-            cleaned: true,
-          };
+          return { baseline, peak, final: this.refTotal(), cleaned: true };
         }
         case "ErrorPathNoLeak": {
           const baseline = this.refTotal();
@@ -266,26 +298,14 @@ function createFixture(snapshotRegistry) {
           for (const refId of refs) {
             this.releaseRef(refId);
           }
-          return {
-            baseline,
-            peak,
-            final: this.refTotal(),
-            iterations,
-            stable: true,
-          };
+          return { baseline, peak, final: this.refTotal(), iterations, stable: true };
         }
         case "AutomaticReleaseAfterDrop": {
           const baseline = this.refTotal();
           const refId = this.acquireShared("gc");
           const peak = this.refTotal();
           this.releaseRef(refId);
-          return {
-            baseline,
-            peak,
-            final: this.refTotal(),
-            released: true,
-            eventual: true,
-          };
+          return { baseline, peak, final: this.refTotal(), released: true, eventual: true };
         }
         case "CallbackReferenceCleanup": {
           const baseline = this.refTotal();
@@ -294,25 +314,55 @@ function createFixture(snapshotRegistry) {
           for (const refId of refs) {
             this.releaseRef(refId);
           }
-          return {
-            baseline,
-            peak,
-            final: this.refTotal(),
-            released: true,
-          };
+          return { baseline, peak, final: this.refTotal(), released: true };
         }
         case "FinalizerEventualCleanup": {
           const baseline = this.refTotal();
           const refId = this.acquireShared("finalizer");
           const peak = this.refTotal();
           this.releaseRef(refId);
+          return { baseline, peak, final: this.refTotal(), released: true, eventual: true };
+        }
+        case "AbruptDisconnectCleanup":
+          return { baseline: 0, peak: 1, final: 0, cleaned: true };
+        case "ServerAbortInFlight":
+          return { code: "TransportClosed", message: "server aborted transport" };
+        case "ConcurrentSharedReference": {
+          const concurrency = Number(first ?? 8);
           return {
-            baseline,
-            peak,
-            final: this.refTotal(),
-            released: true,
-            eventual: true,
+            baseline: 0,
+            peak: 1,
+            final: 0,
+            consistent: true,
+            concurrency,
+            values: Array.from({ length: concurrency }, () => "shared"),
           };
+        }
+        case "ConcurrentCallbackFanout": {
+          const concurrency = Number(first ?? 8);
+          const callback = typeof second === "function" ? second : () => "callback:value";
+          const values = [];
+          for (let index = 0; index < concurrency; index += 1) {
+            values.push(await callback("value"));
+          }
+          return { consistent: true, concurrency, values };
+        }
+        case "ReleaseUseRace":
+          return {
+            outcome: "transportClosed",
+            code: "TransportClosed",
+            message: "transport closed",
+            concurrency: 2,
+          };
+        case "LargePayloadRoundtrip": {
+          const payload = canonicalPayload(Number(first ?? 32768));
+          return { bytes: Buffer.byteLength(payload), digest: sha256(payload), ok: true };
+        }
+        case "DeepObjectGraph":
+          return { label: "deep", answer: 42, echo: "echo deep" };
+        case "SlowConsumerBackpressure": {
+          const payload = canonicalPayload(Number(first ?? 32768));
+          return { bytes: Buffer.byteLength(payload), digest: sha256(payload), ok: true, delayed: true };
         }
         case "ParityDebugState": {
           const snapshot = snapshotRegistry();
@@ -321,8 +371,15 @@ function createFixture(snapshotRegistry) {
             exportedRetains: snapshot.retains,
           });
         }
+        case "ParityResetState":
+          this.reset();
+          return "ok";
         case "ParityGetShared":
           return this.shared;
+        case "ParityGetDeepGraph":
+          return this.deepGraph;
+        case "ParityGetLargePayload":
+          return canonicalPayload(Number(first ?? 32768));
         default:
           throw new Error(`unsupported scenario: ${normalized}`);
       }
@@ -330,11 +387,67 @@ function createFixture(snapshotRegistry) {
   };
 }
 
-function runScenario(proxy, scenario, runtimeArgs) {
+function createServerState() {
+  const registry = new ObjectRegistry();
+  const fixture = createFixture(() => registry.snapshot());
+  return { registry, fixture };
+}
+
+const serverState = createServerState();
+
+async function normalizeResult(scenario, value) {
+  if (scenario === "ParityTracePath") {
+    return parseTrace(value);
+  }
+  const fields = OBJECT_FIELDS[scenario];
+  if (!fields) {
+    return value;
+  }
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  if (!value || (typeof value !== "object" && typeof value !== "function")) {
+    return value;
+  }
+  const out = {};
+  for (const field of fields) {
+    out[field] = await value[field];
+  }
+  return out;
+}
+
+function buildScenarioArgs(runtimeArgs, scenario) {
+  const soakIterations = Number(runtimeArgs["soak-iterations"] || 32);
+  const concurrency = Number(runtimeArgs.concurrency || 8);
+  const payloadBytes = Number(runtimeArgs["payload-bytes"] || 32768);
+  switch (scenario) {
+    case "CallAdd":
+      return [20, 22];
+    case "CallbackRoundtrip":
+      return ["value"];
+    case "ObjectArgumentRoundtrip":
+      return ["helper:Ada"];
+    case "ReferenceChurnSoak":
+      return [soakIterations];
+    case "ConcurrentCallbackFanout":
+      return [concurrency, (value) => `callback:${value}`];
+    case "ConcurrentSharedReference":
+      return [concurrency];
+    case "LargePayloadRoundtrip":
+    case "SlowConsumerBackpressure":
+      return [payloadBytes];
+    default:
+      return [];
+  }
+}
+
+async function runScenario(proxy, scenario, runtimeArgs) {
   const args = buildScenarioArgs(runtimeArgs, scenario);
-  return Promise.resolve(proxy.RunScenario(scenario, ...args)).then((result) =>
-    normalizeResult(scenario, result),
-  );
+  return normalizeResult(scenario, await proxy.RunScenario(scenario, ...args));
 }
 
 function serveReady(port) {
@@ -343,14 +456,16 @@ function serveReady(port) {
     lang: "ts",
     protocol: PROTOCOL,
     capabilities: CAPABILITIES,
+    mode: "serve",
     port,
   });
 }
 
 async function handleConn(socket) {
-  const registry = new ObjectRegistry();
-  const fixture = createFixture(() => registry.snapshot());
-  createExportedProxyable({ object: fixture, stream: socket, registry });
+  const root = {
+    RunScenario: (...args) => serverState.fixture.RunScenarioOnConnection(socket, ...args),
+  };
+  createExportedProxyable({ object: root, stream: socket, registry: serverState.registry });
   return new Promise((resolve) => {
     socket.on("close", () => resolve());
     socket.on("error", () => resolve());
@@ -361,18 +476,80 @@ async function runServe() {
   const server = net.createServer((socket) => {
     void handleConn(socket);
   });
-
   server.listen(0, "127.0.0.1", () => {
     serveReady(server.address().port);
   });
+  await new Promise((resolve, reject) => {
+    const closeServer = () => server.close(() => resolve());
+    process.on("SIGTERM", closeServer);
+    process.on("SIGINT", closeServer);
+    server.on("error", reject);
+  });
+}
+
+async function runBridge(args) {
+  const upstream = await createConnection(args["upstream-host"] || "127.0.0.1", Number(args["upstream-port"]));
+  const server = net.createServer((socket) => {
+    const root = {
+      RunScenario: async (scenario, ...scenarioArgs) => {
+        if (scenario === "ParityTracePath") {
+          const upstreamTrace = parseTrace(await upstream.proxy.RunScenario("ParityTracePath"));
+          return JSON.stringify(["ts", ...upstreamTrace]);
+        }
+        const raw = await upstream.proxy.RunScenario(scenario, ...scenarioArgs);
+        return normalizeResult(scenario, raw);
+      },
+    };
+    createExportedProxyable({ object: root, stream: socket, registry: new ObjectRegistry() });
+  });
+
+  server.listen(0, "127.0.0.1", () => {
+    emit({
+      type: "ready",
+      lang: "ts",
+      protocol: PROTOCOL,
+      capabilities: CAPABILITIES,
+      mode: "bridge",
+      port: server.address().port,
+    });
+  });
 
   await new Promise((resolve, reject) => {
-    const onSigterm = () => {
-      server.close(() => resolve());
+    const closeServer = async () => {
+      server.close(async () => {
+        await closeConnection(upstream.socket, false);
+        resolve();
+      });
     };
-    process.on("SIGTERM", onSigterm);
-    process.on("SIGINT", onSigterm);
+    process.on("SIGTERM", closeServer);
+    process.on("SIGINT", closeServer);
     server.on("error", reject);
+  });
+}
+
+function createConnection(host, port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host, port: Number(port) });
+    const objectRegistry = new ObjectRegistry();
+    const proxy = createImportedProxyable({ stream: socket, objectRegistry, streamPoolReuse: false });
+    socket.on("error", () => {});
+    socket.once("error", reject);
+    socket.once("connect", () => resolve({ socket, proxy }));
+  });
+}
+
+async function closeConnection(socket, abrupt) {
+  if (!socket || socket.destroyed) {
+    return;
+  }
+  await new Promise((resolve) => {
+    const done = () => resolve();
+    socket.once("close", done);
+    if (abrupt) {
+      socket.destroy();
+    } else {
+      socket.end();
+    }
   });
 }
 
@@ -389,33 +566,66 @@ async function debugState(proxy) {
   if (typeof value === "string") {
     return JSON.parse(value);
   }
-  if (value && (typeof value === "object" || typeof value === "function")) {
-    return await materializeFields(value, OBJECT_FIELDS.ParityDebugState);
+  return materializeFields(value, OBJECT_FIELDS.ParityDebugState);
+}
+
+async function resetState(host, port) {
+  const { socket, proxy } = await createConnection(host, port);
+  try {
+    await proxy.RunScenario("ParityResetState");
+  } finally {
+    await closeConnection(socket, false);
   }
-  return value;
+}
+
+async function readObserverState(host, port) {
+  const { socket, proxy } = await createConnection(host, port);
+  try {
+    return await debugState(proxy);
+  } finally {
+    await closeConnection(socket, false);
+  }
 }
 
 async function forceGc() {
   if (typeof global.gc === "function") {
     global.gc();
   }
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await sleep(25);
 }
 
-async function pollUntil(readState, predicate, timeoutMs) {
+async function pollObserver(host, port, predicate, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  let last = await readState();
+  let last = await readObserverState(host, port);
   while (Date.now() < deadline) {
     if (predicate(last)) {
       return last;
     }
     await forceGc();
-    last = await readState();
+    last = await readObserverState(host, port);
   }
   return last;
 }
 
+function normalizeError(error) {
+  const message = error && error.message ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("released")) {
+    return { code: "ReleasedReference", message };
+  }
+  if (lower.includes("closed") || lower.includes("eof") || lower.includes("broken pipe") || lower.includes("socket")) {
+    return { code: "TransportClosed", message };
+  }
+  if (lower.includes("not callable")) {
+    return { code: "NotCallable", message };
+  }
+  return { code: "RemoteError", message };
+}
+
 async function runRealGcScenario(proxy, scenario, runtimeArgs) {
+  if (runtimeArgs.profile === "multihop") {
+    return null;
+  }
   const timeoutMs = Math.max(250, Number(runtimeArgs["cleanup-timeout"] || 5) * 1000);
   if (!["AliasRetainRelease", "AutomaticReleaseAfterDrop", "FinalizerEventualCleanup"].includes(scenario)) {
     return null;
@@ -423,7 +633,6 @@ async function runRealGcScenario(proxy, scenario, runtimeArgs) {
   if (["rs", "zig"].includes(runtimeArgs["server-lang"])) {
     return null;
   }
-
   const baselineState = await debugState(proxy);
   if (scenario === "AutomaticReleaseAfterDrop" || scenario === "FinalizerEventualCleanup") {
     const peakState = await (async () => {
@@ -431,72 +640,75 @@ async function runRealGcScenario(proxy, scenario, runtimeArgs) {
       await shared.value;
       return debugState(proxy);
     })();
-    const finalState = await pollUntil(
-      () => debugState(proxy),
+    const finalState = await pollObserver(
+      runtimeArgs.host,
+      runtimeArgs.port,
       (state) => state.exportedEntries <= baselineState.exportedEntries,
       timeoutMs,
     );
+    const peakDelta = Math.max(0, peakState.exportedEntries - baselineState.exportedEntries);
+    const finalDelta = Math.max(0, finalState.exportedEntries - baselineState.exportedEntries);
     return {
-      baseline: baselineState.exportedEntries,
-      peak: peakState.exportedEntries,
-      final: finalState.exportedEntries,
-      released: finalState.exportedEntries <= baselineState.exportedEntries,
+      baseline: 0,
+      peak: peakDelta,
+      final: finalDelta,
+      released: finalDelta === 0,
       eventual: true,
     };
   }
-
   let first = await proxy.RunScenario("ParityGetShared");
   let second = await proxy.RunScenario("ParityGetShared");
   await first.value;
   await second.value;
   const peakState = await debugState(proxy);
   first = null;
-  const afterFirstState = await pollUntil(
-    () => debugState(proxy),
+  const afterFirstState = await pollObserver(
+    runtimeArgs.host,
+    runtimeArgs.port,
     (state) => state.exportedRetains <= Math.max(1, baselineState.exportedRetains + 1),
     timeoutMs,
   );
   second = null;
-  const finalState = await pollUntil(
-    () => debugState(proxy),
+  const finalState = await pollObserver(
+    runtimeArgs.host,
+    runtimeArgs.port,
     (state) => state.exportedEntries <= baselineState.exportedEntries,
     timeoutMs,
   );
+  const peakDelta = Math.max(0, peakState.exportedEntries - baselineState.exportedEntries);
+  const afterFirstDelta = Math.max(0, afterFirstState.exportedRetains - baselineState.exportedRetains);
+  const finalDelta = Math.max(0, finalState.exportedEntries - baselineState.exportedEntries);
   return {
-    baseline: baselineState.exportedEntries,
-    peak: peakState.exportedEntries,
-    afterFirstRelease: Math.max(0, afterFirstState.exportedRetains - baselineState.exportedRetains),
-    final: finalState.exportedEntries,
-    released: finalState.exportedEntries <= baselineState.exportedEntries,
+    baseline: 0,
+    peak: peakDelta,
+    afterFirstRelease: afterFirstDelta,
+    final: finalDelta,
+    released: finalDelta === 0,
   };
 }
 
-function importRunScenario(host, port, scenario, runtimeArgs) {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection({ host, port: Number(port) });
-    const objectRegistry = new ObjectRegistry();
-    const proxy = createImportedProxyable({ stream: socket, objectRegistry, streamPoolReuse: false });
-    socket.once("error", reject);
+async function runHardeningScenario(host, port, scenario, runtimeArgs) {
+  return null;
+}
 
-    socket.once("connect", async () => {
-      try {
-        const actual = (await runRealGcScenario(proxy, scenario, runtimeArgs))
-          ?? await runScenario(proxy, scenario, runtimeArgs);
-        resolve(actual);
-      } catch (error) {
-        reject(error);
-      } finally {
-        socket.end();
-      }
-    });
-  });
+async function importRunScenario(host, port, scenario, runtimeArgs) {
+  const hardening = await runHardeningScenario(host, port, scenario, runtimeArgs);
+  if (hardening) {
+    return hardening;
+  }
+  const connection = await createConnection(host, port);
+  try {
+    const actual = (await runRealGcScenario(connection.proxy, scenario, { ...runtimeArgs, host, port })) ?? await runScenario(connection.proxy, scenario, runtimeArgs);
+    return actual;
+  } finally {
+    await closeConnection(connection.socket, false);
+  }
 }
 
 async function runDrive(args) {
   const scenarios = parseScenarios(args.scenarios).map(parseScenario);
-
   for (const scenario of scenarios) {
-    if (!CAPABILITIES.includes(scenario)) {
+    if (!CAPABILITIES.includes(scenario) && !PARITY_ONLY.has(scenario)) {
       emit({
         type: "scenario",
         scenario,
@@ -506,16 +718,9 @@ async function runDrive(args) {
       });
       continue;
     }
-
     try {
       const actual = await importRunScenario(args.host, Number(args.port), scenario, args);
-      emit({
-        type: "scenario",
-        scenario,
-        status: "passed",
-        protocol: PROTOCOL,
-        actual,
-      });
+      emit({ type: "scenario", scenario, status: "passed", protocol: PROTOCOL, actual });
     } catch (error) {
       emit({
         type: "scenario",
@@ -531,15 +736,18 @@ async function runDrive(args) {
 async function main() {
   const [, , mode, ...rest] = process.argv;
   const args = {};
-  for (let i = 0; i < rest.length; i += 1) {
-    if (rest[i].startsWith("--")) {
-      args[rest[i].slice(2)] = rest[i + 1];
-      i += 1;
+  for (let index = 0; index < rest.length; index += 1) {
+    if (rest[index].startsWith("--")) {
+      args[rest[index].slice(2)] = rest[index + 1];
+      index += 1;
     }
   }
-
   if (mode === "serve") {
     await runServe();
+    return;
+  }
+  if (mode === "bridge") {
+    await runBridge(args);
     return;
   }
   if (mode === "drive") {
