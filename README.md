@@ -46,7 +46,7 @@ bun add proxyables
 
 **Server (Exporting an object):**
 ```typescript
-import { createExportedProxyable } from 'proxyables';
+import { Proxyable } from "proxyables";
 // import { Duplex } from 'stream'; 
 
 const api = {
@@ -57,7 +57,7 @@ const api = {
 // You just need a Duplex stream (e.g., TCP socket, WebSocket stream, etc.)
 // const stream = ...; 
 
-const exported = createExportedProxyable({ 
+const exported = Proxyable.Export({ 
   object: api, 
   stream 
 });
@@ -65,11 +65,11 @@ const exported = createExportedProxyable({
 
 **Client (Importing the object):**
 ```typescript
-import { createImportedProxyable } from 'proxyables';
+import { Proxyable } from "proxyables";
 
 // const stream = ...;
 
-const proxy = createImportedProxyable({ stream });
+const proxy = Proxyable.ImportFrom({ stream });
 
 // Usage - feels completely local!
 console.log(await proxy.echo("hello")); // "echo hello"
@@ -79,7 +79,7 @@ console.log(await proxy.compute(10, 20)); // 30
 ### Passing Callbacks (Bi-directional)
 
 ```typescript
-const exported = createExportedProxyable({
+const exported = Proxyable.Export({
   object: {
     runWithCallback: (value: string, callback: (message: string) => string) =>
       callback(`received:${value}`),
