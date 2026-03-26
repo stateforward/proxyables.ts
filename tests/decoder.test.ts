@@ -99,10 +99,11 @@ describe("decoder", () => {
 
     it("should decode apply instruction", () => {
         const { encode } = require("@msgpack/msgpack");
-        const payload = { kind: ProxyInstructionKinds.apply, data: ["fn", [1, 2]] };
+        const payload = { kind: ProxyInstructionKinds.apply, data: [1, 2] };
         const [err, res] = decoder.decode(encode(payload));
         expect(err).toBeNull();
         expect(res?.kind).toBe(ProxyInstructionKinds.apply);
+        expect(res?.data).toEqual([1, 2]);
     });
 
     it("should decode construct instruction", () => {

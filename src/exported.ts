@@ -56,19 +56,37 @@ function isPrimitive(value: unknown): boolean {
   return value === null || PRIMITIVE_TYPES.includes(typeof value);
 }
 
+function tryDecodeInstruction(
+  decoder: ProxyInstructionDecoder["decode"],
+  data: Buffer,
+  kinds: number[]
+): ProxyInstruction | null {
+  try {
+    const [error, instruction] = decoder(data, kinds as any);
+    if (error) {
+      return null;
+    }
+    return instruction as ProxyInstruction;
+  } catch {
+    return null;
+  }
+}
+
 function createProxyableServer<TObject extends object>(
   handler: ProxyableHandler<TObject>
 ) {
   return new Server((stream) => {
+    let requestBuffer = Buffer.alloc(0);
     stream.on("data", async (data: Uint8Array) => {
-      const [error, instruction] = handler.decode(data, [
+      requestBuffer = Buffer.concat([requestBuffer, Buffer.from(data)]);
+      const instruction = tryDecodeInstruction(handler.decode, requestBuffer, [
         ProxyInstructionKinds.execute,
         ProxyInstructionKinds.release,
       ]);
-      if (error) {
-        log.error(error);
-        return stream.write(encode(createThrowInstruction(error)));
+      if (!instruction) {
+        return;
       }
+      requestBuffer = Buffer.alloc(0);
       let evalError, evalResult;
       try {
         [evalError, evalResult] = await handler.eval(instruction, []);
@@ -166,6 +184,129 @@ export function createExportedProxyable<TObject extends object>(parameters: {
     }
     return streamPool;
   };
+
+  const decodeResponseValue = (
+    response: ProxyInstruction | null
+  ): unknown => {
+    if (!response) {
+      throw new Error("incomplete callback response");
+    }
+    if (response.kind === ProxyInstructionKinds.throw) {
+      const error = response.data as any;
+      throw new Error(error?.message ?? String(error));
+    }
+    const wrapped = (response as any).data;
+    if (!wrapped || typeof wrapped !== "object" || !("kind" in wrapped)) {
+      return wrapped;
+    }
+    if (wrapped.kind === ProxyValueKinds.undefined) {
+      return undefined;
+    }
+    if (wrapped.kind === ProxyValueKinds.null) {
+      return null;
+    }
+    return "data" in wrapped ? wrapped.data : wrapped;
+  };
+
+  const createRemoteReferenceProxy = (refId: string) =>
+    new Proxy(function () {}, {
+      get: (_, key: PropertyKey) => {
+        if (key === "then") {
+          return undefined;
+        }
+        return (...callArgs: unknown[]) =>
+          new Promise((resolve, reject) => {
+            const run = async () => {
+              const substream = await getStreamPool().acquire();
+              let responseBuffer = Buffer.alloc(0);
+              const cleanup = () => {
+                substream.removeAllListeners("data");
+                substream.removeAllListeners("error");
+                getStreamPool().release(substream);
+              };
+              substream.on("data", (chunk) => {
+                responseBuffer = Buffer.concat([responseBuffer, Buffer.from(chunk)]);
+                const response = tryDecodeInstruction(decode, responseBuffer, [
+                  ProxyInstructionKinds.return,
+                  ProxyInstructionKinds.throw,
+                ]);
+                if (!response) {
+                  return;
+                }
+                cleanup();
+                try {
+                  resolve(decodeResponseValue(response));
+                } catch (error) {
+                  reject(error);
+                }
+              });
+              substream.on("error", (error) => {
+                cleanup();
+                reject(error);
+              });
+              const finalInstructions: ProxyInstructions[] = [
+                { kind: ProxyValueKinds.Reference, data: refId, id: muid().toString() },
+                createInstructionUnsafe(ProxyInstructionKinds.get, [String(key)]),
+                createInstructionUnsafe(
+                  ProxyInstructionKinds.apply,
+                  callArgs.map((value) => createValue(value))
+                ),
+              ];
+              const execInstruction = createInstructionUnsafe(
+                ProxyInstructionKinds.execute,
+                finalInstructions
+              );
+              substream.write(Buffer.from(encode(execInstruction)));
+            };
+            void run().catch(reject);
+          });
+      },
+      apply: (_, __, callArgs) =>
+        new Promise((resolve, reject) => {
+          const run = async () => {
+            const substream = await getStreamPool().acquire();
+            let responseBuffer = Buffer.alloc(0);
+            const cleanup = () => {
+              substream.removeAllListeners("data");
+              substream.removeAllListeners("error");
+              getStreamPool().release(substream);
+            };
+            substream.on("data", (chunk) => {
+              responseBuffer = Buffer.concat([responseBuffer, Buffer.from(chunk)]);
+              const response = tryDecodeInstruction(decode, responseBuffer, [
+                ProxyInstructionKinds.return,
+                ProxyInstructionKinds.throw,
+              ]);
+              if (!response) {
+                return;
+              }
+              cleanup();
+              try {
+                resolve(decodeResponseValue(response));
+              } catch (error) {
+                reject(error);
+              }
+            });
+            substream.on("error", (error) => {
+              cleanup();
+              reject(error);
+            });
+            const finalInstructions: ProxyInstructions[] = [
+              { kind: ProxyValueKinds.Reference, data: refId, id: muid().toString() },
+              createInstructionUnsafe(
+                ProxyInstructionKinds.apply,
+                callArgs.map((value) => createValue(value))
+              ),
+            ];
+            const execInstruction = createInstructionUnsafe(
+              ProxyInstructionKinds.execute,
+              finalInstructions
+            );
+            substream.write(Buffer.from(encode(execInstruction)));
+          };
+          void run().catch(reject);
+        }),
+    });
 
   const handler: ProxyableHandler<TObject> =
     parameters.handler ??
@@ -269,6 +410,7 @@ export function createExportedProxyable<TObject extends object>(parameters: {
          // Hydrate arguments (Callbacks)
          const args = (data as unknown[]).map(arg => {
              if (arg && typeof arg === 'object' && (arg as any).kind === ProxyValueKinds.Reference) {
+                 return createRemoteReferenceProxy((arg as any).data);
                  const refId = (arg as any).data;
                  // Create a Proxy that calls back the client
                  return new Proxy(function() {}, {
@@ -329,6 +471,9 @@ export function createExportedProxyable<TObject extends object>(parameters: {
 
                  });
              }
+             if (arg && typeof arg === "object" && "data" in (arg as any)) {
+                 return (arg as any).data;
+             }
              return arg;
          });
 
@@ -346,6 +491,7 @@ export function createExportedProxyable<TObject extends object>(parameters: {
          // Hydrate arguments (Callbacks)
          const args = (data as unknown[]).map(arg => {
              if (arg && typeof arg === 'object' && (arg as any).kind === ProxyValueKinds.Reference) {
+                 return createRemoteReferenceProxy((arg as any).data);
                  const refId = (arg as any).data;
                  return new Proxy(function() {}, {
                      apply: async (_, __, callArgs) => {
@@ -376,6 +522,9 @@ export function createExportedProxyable<TObject extends object>(parameters: {
                          });
                      }
                  });
+             }
+             if (arg && typeof arg === "object" && "data" in (arg as any)) {
+                 return (arg as any).data;
              }
              return arg;
          });

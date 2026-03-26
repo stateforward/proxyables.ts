@@ -54,12 +54,11 @@ export function createGetInstruction(
 
 const applyInstructionDataValidator = createInstructionDataValidator(
   ProxyInstructionKinds.apply,
-  (data) =>
-    Array.isArray(data) && typeof data[0] === "string" && Array.isArray(data[1])
+  (data) => Array.isArray(data)
 );
 
 export function createApplyInstruction(
-  data: [string, unknown[]],
+  data: unknown[],
   validate = applyInstructionDataValidator
 ): ProxyApplyInstruction {
   return createInstructionUnsafe(ProxyInstructionKinds.apply, validate(data));

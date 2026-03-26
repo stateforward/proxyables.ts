@@ -24,13 +24,12 @@ describe("instructions", () => {
 
   describe("createApplyInstruction", () => {
     it("should create valid apply instruction", () => {
-      const instr = createApplyInstruction(["method", [1, 2]]);
-      expect(instr.data).toEqual(["method", [1, 2]]);
+      const instr = createApplyInstruction([1, 2]);
+      expect(instr.data).toEqual([1, 2]);
     });
 
     it("should fail on invalid data", () => {
-       expect(() => createApplyInstruction(["method"] as any)).toThrow(ValidationError); // Missing args
-       expect(() => createApplyInstruction([1, []] as any)).toThrow(ValidationError); // Method not string
+       expect(() => createApplyInstruction("not-an-array" as any)).toThrow(ValidationError);
     });
   });
 });

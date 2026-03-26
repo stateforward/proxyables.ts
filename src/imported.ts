@@ -113,6 +113,46 @@ function unwrapResult(result: ProxyInstruction, context: Context): unknown {
   return result;
 }
 
+function unwrapArgumentValue(arg: unknown, context: Context): unknown {
+  if (!arg || typeof arg !== "object" || !("kind" in (arg as any))) {
+    return arg;
+  }
+  const wrapped = arg as any;
+  if (wrapped.kind === ProxyValueKinds.Reference) {
+    return unwrapResult(
+      {
+        id: wrapped.id ?? muid().toString(),
+        kind: ProxyInstructionKinds.return,
+        data: wrapped,
+      } as any,
+      context
+    );
+  }
+  if (wrapped.kind === ProxyValueKinds.undefined) {
+    return undefined;
+  }
+  if (wrapped.kind === ProxyValueKinds.null) {
+    return null;
+  }
+  return "data" in wrapped ? wrapped.data : arg;
+}
+
+function tryDecodeInstruction(
+  decoder: ProxyInstructionDecoder["decode"],
+  data: Buffer,
+  kinds: number[]
+): ProxyInstruction | null {
+  try {
+    const [error, instruction] = decoder(data, kinds as any);
+    if (error) {
+      return null;
+    }
+    return instruction as ProxyInstruction;
+  } catch {
+    return null;
+  }
+}
+
 function createProxyCursor<TObject extends object>(
   context: Context,
   instructions: ProxyInstructions[]
@@ -222,6 +262,7 @@ async function executeInstructions(
   return new Promise((resolve, reject) => {
     const { encoder, decoder, streamPool } = context;
     let substream: Duplex | null = null;
+    let responseBuffer = Buffer.alloc(0);
 
     // Prepare execution instruction
     const execInstruction = createInstructionUnsafe(
@@ -238,21 +279,23 @@ async function executeInstructions(
     };
 
     const handleData = (data: Buffer | Uint8Array) => {
-      const [error, instruction] = decoder(data, [
+      responseBuffer = Buffer.concat([responseBuffer, Buffer.from(data)]);
+      const instruction = tryDecodeInstruction(decoder, responseBuffer, [
         ProxyInstructionKinds.throw,
         ProxyInstructionKinds.return,
         ProxyInstructionKinds.next,
       ]);
 
-      if (error) {
-        log.error({ error }, `execution error`);
-        cleanup();
-        resolve([error]); 
+      if (!instruction) {
         return;
       }
 
-      // log.info({ instruction }, `received ${instruction.kind}`);
       cleanup();
+      responseBuffer = Buffer.alloc(0);
+      if (instruction.kind === ProxyInstructionKinds.throw) {
+        resolve([instruction.data as any]);
+        return;
+      }
       resolve([null, instruction as any]);
     };
 
@@ -321,17 +364,18 @@ export function createImportedProxyable<TObject extends object>({
 
   // Handle incoming execution requests (Callbacks)
   const handleStream = (stream: Duplex) => {
+      let requestBuffer = Buffer.alloc(0);
       stream.on("data", async (data: Buffer | Uint8Array) => {
-          // Decode execution instruction
-          const [error, instruction] = decode(data, [
+          requestBuffer = Buffer.concat([requestBuffer, Buffer.from(data)]);
+          const instruction = tryDecodeInstruction(decode, requestBuffer, [
             ProxyInstructionKinds.execute,
             ProxyInstructionKinds.release,
           ]);
 
-          if (error) {
-              log.error(error);
-              return stream.write(encode(createThrowInstruction(error as any)));
+          if (!instruction) {
+              return;
           }
+          requestBuffer = Buffer.alloc(0);
 
           // Evaluate logic (Simplified version of exported.ts handler)
           const execute = async () => {
@@ -367,17 +411,26 @@ export function createImportedProxyable<TObject extends object>({
                          return createThrowInstruction({ message: "No target for operation" });
                      }
 
+                     if (instr.kind === ProxyInstructionKinds.get) {
+                         try {
+                             const [key] = instr.data as [string];
+                             const value = target[key];
+                             const nextValue =
+                               typeof value === "function" ? value.bind(target) : value;
+                             stack.push(createValue(objectRegistry, nextValue) as any);
+                             continue;
+                         } catch (e: any) {
+                             return createThrowInstruction({ message: e.message });
+                         }
+                     }
+
                      if (instr.kind === ProxyInstructionKinds.apply) {
                          // Apply on target
                          if (typeof target === 'function') {
                              try {
                                  // We need to hydrate arguments!
                                  const args = (instr.data as unknown[]).map(arg => {
-                                     // If Server sent a Reference, it sent `{ kind: Reference, data: ID }`.
-                                     if (arg && typeof arg === 'object' && (arg as any).kind === ProxyValueKinds.Reference) {
-                                         return unwrapResult({ kind: ProxyInstructionKinds.return, data: arg } as any, { client, decoder: decode, encoder: encode, registry, objectRegistry, streamPool });
-                                     }
-                                     return arg;
+                                     return unwrapArgumentValue(arg, { client, decoder: decode, encoder: encode, registry, objectRegistry, streamPool });
                                  });
 
                                  const result = await Reflect.apply(target, undefined, args);
