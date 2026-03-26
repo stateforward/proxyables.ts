@@ -17,9 +17,9 @@ describe("memory leak", () => {
     };
     
     // Inject our registry
-    // Note: We need to use createExportedProxyable directly or patch Proxyable.export
-    // But Proxyable.export calls createExportedProxyable.
-    // We can't easily inject into Proxyable.export without changing its signature too.
+    // Note: We need to use createExportedProxyable directly or patch Proxyable.Export
+    // But Proxyable.Export calls createExportedProxyable.
+    // We can't easily inject into Proxyable.Export without changing its signature too.
     // So let's use createExportedProxyable directly.
     
     const { createExportedProxyable } = await import("../src/exported");

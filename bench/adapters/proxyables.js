@@ -46,8 +46,8 @@ module.exports = {
       },
     };
     const { a: clientStream, b: serverStream } = createDuplexPair();
-    Proxyable.export({ object, stream: serverStream });
-    const remote = Proxyable.import({ stream: clientStream });
+    Proxyable.Export({ object, stream: serverStream });
+    const remote = Proxyable.ImportFrom({ stream: clientStream });
     return { remote, payload, clientStream, serverStream };
   },
   async teardown(ctx) {

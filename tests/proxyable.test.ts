@@ -13,7 +13,7 @@ describe("proxyable", () => {
       a: 1,
       b: 2,
     };
-    const exported = Proxyable.export({ object });
+    const exported = Proxyable.Export({ object });
       const remote = Proxyable.importFrom<typeof object>({
       stream: exported[ProxyableSymbol.handler].stream as any,
     });
@@ -30,7 +30,7 @@ describe("proxyable", () => {
       },
       func: () => "hello"
     };
-    const exported = Proxyable.export({ object });
+    const exported = Proxyable.Export({ object });
       const remote = Proxyable.importFrom<typeof object>({
       stream: exported[ProxyableSymbol.handler].stream as any,
     });
@@ -52,7 +52,7 @@ describe("proxyable", () => {
          add: (a: number, b: number) => a + b,
          greet: (name: string) => `Hello ${name}`
      };
-     const exported = Proxyable.export({ object });
+     const exported = Proxyable.Export({ object });
        const remote = Proxyable.importFrom<typeof object>({
        stream: exported[ProxyableSymbol.handler].stream as any,
      });
@@ -69,7 +69,7 @@ describe("proxyable", () => {
       const object = {
           createUser: (name: string) => ({ name, id: 123 })
       };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
         stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -93,7 +93,7 @@ describe("proxyable", () => {
           list: [1, 2, 3],
           getAt: (idx: number) => [10, 20, 30][idx]
       };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
         stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -111,7 +111,7 @@ describe("proxyable", () => {
       const object = {
           fail: () => { throw new Error("Boom"); }
       };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
         stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -123,7 +123,7 @@ describe("proxyable", () => {
       const object = {
           val: 1
       };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
         stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -153,7 +153,7 @@ describe("proxyable", () => {
           valNull: null,
           valUndefined: undefined
       };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
         stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -170,7 +170,7 @@ describe("proxyable", () => {
           data: largeString,
           echo: (str: string) => str
       };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
         stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -194,7 +194,7 @@ describe("proxyable", () => {
           Greeter
       };
       
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
         stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -211,7 +211,7 @@ describe("proxyable", () => {
 
   it("should handle error when calling non-function property", async () => {
       const object = { val: 123 };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
         const remote = Proxyable.importFrom<typeof object>({
          stream: exported[ProxyableSymbol.handler].stream as any,
       });
@@ -231,7 +231,7 @@ describe("proxyable", () => {
 describe("proxyable internal", () => {
   it("should allow local access on exported proxy (returning [error, value] tuple)", () => {
       const object = { val: 123 };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
       
       // Access property locally returns the result tuple [error, UnproxyableValue]
       const result = (exported as any).val;
@@ -245,7 +245,7 @@ describe("proxyable internal", () => {
 
   it("should handle unknown instructions sent to server", async () => {
       const object = { val: 1 };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
       const stream = exported[ProxyableSymbol.handler].stream;
       
       const client = new Client();
@@ -288,7 +288,7 @@ describe("proxyable internal", () => {
 
   it("should handle unknown instruction via direct eval call", async () => {
       const object = { val: 1 };
-      const exported = Proxyable.export({ object });
+      const exported = Proxyable.Export({ object });
       const handler = exported[ProxyableSymbol.handler];
       
       const badInstruction: any = { kind: 99999, data: "test" };

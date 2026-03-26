@@ -9,7 +9,7 @@ export class Proxyable {
   static exports: Record<string, unknown> = {};
   static imports: Record<string, unknown> = {};
 
-  static export<TObject extends object>({
+  static Export<TObject extends object>({
     object,
     stream,
     handler,
@@ -25,21 +25,7 @@ export class Proxyable {
     return proxy;
   }
 
-  static Export<TObject extends object>({
-    object,
-    stream,
-    handler,
-    schema,
-  }: {
-    object: TObject;
-    stream?: Duplex;
-    handler?: ProxyableHandler<TObject>;
-    schema?: unknown;
-  }): ProxyableExport<TObject> {
-    return Proxyable.export({ object, stream, handler, schema });
-  }
-
-  static importFrom<TObject extends object>({
+  static ImportFrom<TObject extends object>({
     stream,
     schema,
   }: {
@@ -50,16 +36,5 @@ export class Proxyable {
     const proxy = createImportedProxyable<TObject>({ stream: stream as any });
     Proxyable.imports[proxy[ProxyableSymbol.id]] = proxy;
     return proxy;
-  }
-
-  static ImportFrom<TObject extends object>({
-    stream,
-    schema,
-  }: {
-    stream: Duplex;
-    handler?: ProxyableHandler<TObject>;
-    schema?: unknown;
-  }) {
-    return Proxyable.importFrom({ stream, schema });
   }
 }
