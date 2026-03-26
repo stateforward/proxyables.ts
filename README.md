@@ -79,10 +79,20 @@ console.log(await proxy.compute(10, 20)); // 30
 ### Passing Callbacks (Bi-directional)
 
 ```typescript
-// Client
-await proxy.onRemoteEvent((data) => {
-  console.log("Received data from server:", data);
+const exported = createExportedProxyable({
+  object: {
+    runWithCallback: (value: string, callback: (message: string) => string) =>
+      callback(`received:${value}`),
+  },
+  stream,
 });
+
+const callbackResult = await exported.runWithCallback(
+  "hello",
+  (message) => `callback:${message}`
+);
+
+callbackResult === "callback:received:hello";
 ```
 The callback function is automatically registered, assigned an ID, and a proxy reference is sent to the server. When the server calls it, it opens a reverse stream to execute the client-side function.
 
