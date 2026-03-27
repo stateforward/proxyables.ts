@@ -3,6 +3,7 @@
 
 const crypto = require("node:crypto");
 const net = require("node:net");
+const { performance } = require("node:perf_hooks");
 const {
   createExportedProxyable,
   createImportedProxyable,
@@ -733,6 +734,66 @@ async function runDrive(args) {
   }
 }
 
+function buildBenchmarkMetrics(samples) {
+  const ordered = [...samples].sort((left, right) => left - right);
+  const totalMs = samples.reduce((sum, value) => sum + value, 0);
+  const pick = (fraction) => ordered[Math.max(0, Math.min(ordered.length - 1, Math.round((ordered.length - 1) * fraction)))] ?? 0;
+  return {
+    totalMs,
+    avgMs: samples.length === 0 ? 0 : totalMs / samples.length,
+    ops: totalMs <= 0 ? 0 : (samples.length / totalMs) * 1000,
+    p50Ms: pick(0.5),
+    p95Ms: pick(0.95),
+    minMs: ordered[0] ?? 0,
+    maxMs: ordered[ordered.length - 1] ?? 0,
+  };
+}
+
+async function runBench(args) {
+  const scenarios = parseScenarios(args.scenarios).map(parseScenario);
+  const iterations = Math.max(1, Number(args.iterations || 1000));
+  const warmup = Math.max(0, Number(args.warmup || 100));
+  for (const scenario of scenarios) {
+    if (!CAPABILITIES.includes(scenario)) {
+      emit({ type: "benchmark", scenario, status: "unsupported", protocol: PROTOCOL, message: "unsupported" });
+      continue;
+    }
+    try {
+      const connection = await createConnection(args.host, Number(args.port));
+      try {
+        for (let index = 0; index < warmup; index += 1) {
+          await runScenario(connection.proxy, scenario, args);
+        }
+        const samples = [];
+        for (let index = 0; index < iterations; index += 1) {
+          const start = performance.now();
+          await runScenario(connection.proxy, scenario, args);
+          samples.push(performance.now() - start);
+        }
+        emit({
+          type: "benchmark",
+          scenario,
+          status: "passed",
+          protocol: PROTOCOL,
+          iterations,
+          warmup,
+          metrics: buildBenchmarkMetrics(samples),
+        });
+      } finally {
+        await closeConnection(connection.socket, false);
+      }
+    } catch (error) {
+      emit({
+        type: "benchmark",
+        scenario,
+        status: "failed",
+        protocol: PROTOCOL,
+        message: error && error.message ? error.message : String(error),
+      });
+    }
+  }
+}
+
 async function main() {
   const [, , mode, ...rest] = process.argv;
   const args = {};
@@ -752,6 +813,11 @@ async function main() {
   }
   if (mode === "drive") {
     await runDrive(args);
+    process.exit(0);
+    return;
+  }
+  if (mode === "bench") {
+    await runBench(args);
     process.exit(0);
     return;
   }
