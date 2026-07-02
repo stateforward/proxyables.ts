@@ -369,7 +369,6 @@ export function createExportedProxyable<TObject extends object>(parameters: {
          });
 
          if (typeof target === 'function') {
-             registry.register(target);
              const result = await Reflect.apply(target, object, args); 
              return [null, result];
          }

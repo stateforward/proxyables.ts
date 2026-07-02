@@ -40,11 +40,9 @@ describe("reference counting", () => {
     expect(await ref1.data).toBe("shared");
     expect(await ref2.data).toBe("shared");
     
-    // Should be deduped in registry
-    // Expected contents: Function(getShared) + Object(shared)
-    // Both should have RefCount=2 (or more if internal interim steps registered them)
-    // But Registry Size determines unique objects.
-    expect(registry.size).toBe(2);
+    // Should be deduped in registry.
+    // Invoked methods are not retained as exported references; only the returned object is.
+    expect(registry.size).toBe(1);
     
     // 3. Drop ONE reference
     ref1 = null; 
@@ -54,9 +52,9 @@ describe("reference counting", () => {
     // Object remains.
     await waitForGC(() => false, 5); // Just burn some cycles
     
-    // Check size. Should still be 2.
+    // Check size. Should still be 1.
     // Asserting we didn't premature delete.
-    expect(registry.size).toBe(2);
+    expect(registry.size).toBe(1);
     
     // Verify other proxy still works
     const data2 = await ref2.data;
@@ -68,12 +66,11 @@ describe("reference counting", () => {
     // GC triggers release(ID for shared)
     // RefCount for Shared: 1 -> 0.
     // Object DELETED.
-    // Function(getShared) remains (leaked).
-    // Total size: 1.
+    // Total size: 0.
     
-    const success = await waitForGC(() => registry.size === 1);
+    const success = await waitForGC(() => registry.size === 0);
     expect(success).toBe(true);
-    expect(registry.size).toBe(1); // Final confirmation
+    expect(registry.size).toBe(0); // Final confirmation
     
     const contents = (registry as any).debug();
     const hasShared = contents.some((c: any) => c.obj && c.obj.data === "shared");
