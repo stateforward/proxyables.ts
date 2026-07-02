@@ -34,10 +34,11 @@ To mitigate the overhead of opening new Yamux streams (SYN packets) for every si
 
 ## Installation
 
+<!-- install commands from package.json#name -->
 ```bash
-npm install proxyables
+npm install @stateforward/proxyables.ts
 # or
-bun add proxyables
+bun add @stateforward/proxyables.ts
 ```
 
 ## Usage
@@ -45,8 +46,9 @@ bun add proxyables
 ### Basic Example
 
 **Server (Exporting an object):**
+<!-- TypeScript import specifier from package.json#name -->
 ```typescript
-import { Proxyable } from "proxyables";
+import { Proxyable } from "@stateforward/proxyables.ts";
 
 const api = {
   echo: (msg: string) => `echo ${msg}`,
@@ -63,8 +65,9 @@ const exported = Proxyable.Export({
 ```
 
 **Client (Importing the object):**
+<!-- TypeScript import specifier from package.json#name -->
 ```typescript
-import { Proxyable } from "proxyables";
+import { Proxyable } from "@stateforward/proxyables.ts";
 
 // const transport = { readable, writable };
 

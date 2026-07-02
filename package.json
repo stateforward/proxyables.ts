@@ -1,5 +1,5 @@
 {
-  "name": "proxyables",
+  "name": "@stateforward/proxyables.ts",
   "version": "0.0.1",
   "description": "Web Streams-based object proxy RPC over Yamux.",
   "main": "dist/index.mjs",
@@ -15,6 +15,9 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=20"
