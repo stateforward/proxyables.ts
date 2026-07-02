@@ -1,7 +1,7 @@
-import { Duplex } from "stream";
+import type { Stream } from "@stateforward/yamux.ts";
 
 type SessionLike = {
-  open: () => Duplex;
+  openStream: () => Promise<Stream>;
 };
 
 type StreamPoolOptions = {
@@ -10,14 +10,14 @@ type StreamPoolOptions = {
   reuse?: boolean;
 };
 
-type PendingRequest = (stream: Duplex) => void;
+type PendingRequest = (stream: Stream) => void;
 
 export class StreamPool {
   private session: SessionLike;
   private max: number;
   private openCount = 0;
-  private idle: Duplex[] = [];
-  private idleSet = new Set<Duplex>();
+  private idle: Stream[] = [];
+  private idleSet = new Set<Stream>();
   private pending: PendingRequest[] = [];
   private reuse: boolean;
 
@@ -27,20 +27,25 @@ export class StreamPool {
     this.reuse = reuse;
   }
 
-  async acquire(): Promise<Duplex> {
-    const stream = this.idle.pop();
-    if (stream) {
+  async acquire(): Promise<Stream> {
+    for (;;) {
+      const stream = this.idle.pop();
+      if (!stream) break;
       this.idleSet.delete(stream);
-      return stream;
+      if (!this.isClosed(stream)) {
+        return stream;
+      }
+      this.cleanupStream(stream);
     }
     if (this.openCount < this.max) {
-      return this.createStream();
+      return await this.createStream();
     }
     return new Promise((resolve) => this.pending.push(resolve));
   }
 
-  release(stream: Duplex) {
+  release(stream: Stream) {
     if (this.isClosed(stream)) {
+      this.cleanupStream(stream);
       return;
     }
     const waiter = this.pending.shift();
@@ -49,39 +54,36 @@ export class StreamPool {
       return;
     }
     if (!this.reuse) {
-      stream.destroy();
+      void stream.reset();
+      this.cleanupStream(stream);
       return;
     }
     this.idle.push(stream);
     this.idleSet.add(stream);
   }
 
-  private createStream(): Duplex {
-    const stream = this.session.open();
+  private async createStream(): Promise<Stream> {
     this.openCount += 1;
-    const onClose = () => {
-      this.cleanupStream(stream);
-      if (this.pending.length && this.openCount < this.max) {
-        const waiter = this.pending.shift();
-        if (waiter) waiter(this.createStream());
-      }
-    };
-    stream.once("close", onClose);
-    stream.once("error", onClose);
-    return stream;
+    try {
+      return await this.session.openStream();
+    } catch (error) {
+      this.openCount = Math.max(0, this.openCount - 1);
+      throw error;
+    }
   }
 
-  private cleanupStream(stream: Duplex) {
+  private cleanupStream(stream: Stream) {
     if (this.idleSet.delete(stream)) {
       this.idle = this.idle.filter((item) => item !== stream);
     }
     this.openCount = Math.max(0, this.openCount - 1);
+    if (this.pending.length && this.openCount < this.max) {
+      const waiter = this.pending.shift();
+      if (waiter) void this.createStream().then(waiter);
+    }
   }
 
-  private isClosed(stream: Duplex) {
-    return (
-      stream.destroyed ||
-      (stream.readableEnded && stream.writableEnded)
-    );
+  private isClosed(stream: Stream) {
+    return stream.closed || Boolean(stream.resetError);
   }
 }

@@ -1,11 +1,26 @@
 import "source-map-support/register";
 import { describe, it, expect } from "vitest";
+import { createClient } from "@stateforward/yamux.ts";
 import { Proxyable } from "../src";
-import { Client } from "yamux-js/cjs";
 import { ProxyableSymbol } from "../src/symbol";
 import { createEncoder } from "../src/encoder";
 import { createDecoder } from "../src/decoder";
 import { ProxyInstructionKinds } from "../src/types";
+import { readFromStream, writeToStream } from "../src/transport";
+import { createTransportPair } from "./helpers";
+
+function createRemote<TObject extends object>(object: TObject) {
+  const transport = createTransportPair();
+  const exported = Proxyable.Export({ object, transport: transport.server });
+  const remote = Proxyable.ImportFrom<TObject>({ transport: transport.client });
+  return { exported, remote, transport };
+}
+
+function createExported<TObject extends object>(object: TObject) {
+  const transport = createTransportPair();
+  const exported = Proxyable.Export({ object, transport: transport.server });
+  return { exported, transport };
+}
 
 describe("proxyable", () => {
   it("should create a proxyable object", async () => {
@@ -13,10 +28,7 @@ describe("proxyable", () => {
       a: 1,
       b: 2,
     };
-    const exported = Proxyable.Export({ object });
-      const remote = Proxyable.importFrom<typeof object>({
-      stream: exported[ProxyableSymbol.handler].stream as any,
-    });
+    const { remote } = createRemote(object);
 
     const a = await remote.a;
     expect(a).toBe(1);
@@ -30,10 +42,7 @@ describe("proxyable", () => {
       },
       func: () => "hello"
     };
-    const exported = Proxyable.Export({ object });
-      const remote = Proxyable.importFrom<typeof object>({
-      stream: exported[ProxyableSymbol.handler].stream as any,
-    });
+    const { remote } = createRemote(object);
 
     const x = await (remote.nested as any).x;
     expect(x).toBe(10);
@@ -52,10 +61,7 @@ describe("proxyable", () => {
          add: (a: number, b: number) => a + b,
          greet: (name: string) => `Hello ${name}`
      };
-     const exported = Proxyable.Export({ object });
-       const remote = Proxyable.importFrom<typeof object>({
-       stream: exported[ProxyableSymbol.handler].stream as any,
-     });
+     const { remote } = createRemote(object);
      
      // Test simple function execution
      const sum = await remote.add(5, 3);
@@ -69,10 +75,7 @@ describe("proxyable", () => {
       const object = {
           createUser: (name: string) => ({ name, id: 123 })
       };
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-        stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      const { remote } = createRemote(object);
       
       const user = await remote.createUser("Alice");
       
@@ -93,10 +96,7 @@ describe("proxyable", () => {
           list: [1, 2, 3],
           getAt: (idx: number) => [10, 20, 30][idx]
       };
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-        stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      const { remote } = createRemote(object);
 
       // Array access
       const item = await (remote.list as any)[1];
@@ -111,10 +111,7 @@ describe("proxyable", () => {
       const object = {
           fail: () => { throw new Error("Boom"); }
       };
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-        stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      const { remote } = createRemote(object);
       
       await expect(remote.fail()).rejects.toThrow("Boom"); 
   });
@@ -123,10 +120,7 @@ describe("proxyable", () => {
       const object = {
           val: 1
       };
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-        stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      createRemote(object);
 
       // Note: `set` on proxyable import currently doesn't trigger remote set automatically via assignment?
       // The `handler` in `imported.ts` only has `get`, `apply`, `construct`.
@@ -153,10 +147,7 @@ describe("proxyable", () => {
           valNull: null,
           valUndefined: undefined
       };
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-        stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      const { remote } = createRemote(object);
       
       expect(await remote.getNull()).toBeNull();
       expect(await remote.getUndefined()).toBeUndefined();
@@ -170,10 +161,7 @@ describe("proxyable", () => {
           data: largeString,
           echo: (str: string) => str
       };
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-        stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      const { remote } = createRemote(object);
       
       expect(await remote.data).toBe(largeString);
       expect(await remote.echo(largeString)).toBe(largeString);
@@ -194,10 +182,7 @@ describe("proxyable", () => {
           Greeter
       };
       
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-        stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      const { remote } = createRemote(object);
       
       // Instantiate remote class
       // Note: `remote.Greeter` returns a proxy to the class constructor.
@@ -211,10 +196,7 @@ describe("proxyable", () => {
 
   it("should handle error when calling non-function property", async () => {
       const object = { val: 123 };
-      const exported = Proxyable.Export({ object });
-        const remote = Proxyable.importFrom<typeof object>({
-         stream: exported[ProxyableSymbol.handler].stream as any,
-      });
+      const { remote } = createRemote(object);
       // remote.val is number. Calling it should fail.
       // remote.val(...) -> get("val") -> 1. apply(ignored) -> target=1.
       await expect((remote as any).val()).rejects.toThrow("target is not a function");
@@ -231,7 +213,7 @@ describe("proxyable", () => {
 describe("proxyable internal", () => {
   it("should allow local access on exported proxy (returning [error, value] tuple)", () => {
       const object = { val: 123 };
-      const exported = Proxyable.Export({ object });
+      const { exported } = createExported(object);
       
       // Access property locally returns the result tuple [error, UnproxyableValue]
       const result = (exported as any).val;
@@ -245,13 +227,10 @@ describe("proxyable internal", () => {
 
   it("should handle unknown instructions sent to server", async () => {
       const object = { val: 1 };
-      const exported = Proxyable.Export({ object });
-      const stream = exported[ProxyableSymbol.handler].stream;
-      
-      const client = new Client();
-      (stream as any).pipe(client as any).pipe(stream);
-      
-      const session = client.open();
+      const transport = createTransportPair();
+      const exported = Proxyable.Export({ object, transport: transport.server });
+      const client = createClient(transport.client);
+      const session = await client.openStream();
       const encode = createEncoder().encode;
       
       // Send execute with unknown instruction kind in data
@@ -259,36 +238,24 @@ describe("proxyable internal", () => {
       const badInstruction = { kind: 99999, data: "test" };
       const exec = { kind: ProxyInstructionKinds.execute, data: [badInstruction] };
       
-      (session as any).write(Buffer.from(encode(exec)));
+      await writeToStream(session, encode(exec));
       
       const decode = createDecoder().decode;
-      
-      await new Promise<void>((resolve, reject) => {
-          (session as any).on("data", (data: any) => {
-              const [err, res] = decode(data);
-              // Server sends back Throw instruction or Return?
-              // The handler.eval returns [error].
-              // createProxyableServer sends: encode(createThrowInstruction(evalError))
-              
-              if (res?.kind === ProxyInstructionKinds.throw) {
-                  // data of throw instruction is ProxyError
-                  try {
-                      // Implementation detail: unknown instructions in 'execute' are skipped, 
-                      // leading to empty stack and "no result" error.
-                      expect((res.data as any).message).toContain("no result");
-                      resolve();
-                  } catch (e) {
-                      reject(e);
-                  }
-              }
-          });
-          (session as any).on("error", reject);
-      });
+      const data = await readFromStream(session);
+      expect(data).not.toBeNull();
+      const [err, res] = decode(data!);
+      expect(err).toBeNull();
+      expect(res?.kind).toBe(ProxyInstructionKinds.throw);
+      // Implementation detail: unknown instructions in 'execute' are skipped,
+      // leading to empty stack and "no result" error.
+      expect((res?.data as any).message).toContain("no result");
+      await client.close();
+      await exported[ProxyableSymbol.handler].session.close();
   });
 
   it("should handle unknown instruction via direct eval call", async () => {
       const object = { val: 1 };
-      const exported = Proxyable.Export({ object });
+      const { exported } = createExported(object);
       const handler = exported[ProxyableSymbol.handler];
       
       const badInstruction: any = { kind: 99999, data: "test" };

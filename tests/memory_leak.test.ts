@@ -1,9 +1,8 @@
 
 import "source-map-support/register";
 import { describe, it, expect } from "vitest";
-import { Proxyable } from "../src";
-import { ProxyableSymbol } from "../src/symbol";
 import { ObjectRegistry } from "../src/exported";
+import { createTransportPair } from "./helpers";
 
 // Helper to wait for GC
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,12 +21,13 @@ describe("memory leak", () => {
     // We can't easily inject into Proxyable.Export without changing its signature too.
     // So let's use createExportedProxyable directly.
     
+    const transport = createTransportPair();
     const { createExportedProxyable } = await import("../src/exported");
-    const exported = createExportedProxyable({ object, registry });
+    const exported = createExportedProxyable({ object, registry, transport: transport.server });
     
     const { createImportedProxyable } = await import("../src/imported");
     const remote = createImportedProxyable<typeof object>({
-      stream: exported[ProxyableSymbol.handler].stream as any,
+      transport: transport.client,
     });
 
     // 2. Create Reference

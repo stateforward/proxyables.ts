@@ -1,35 +1,26 @@
-const { Duplex, PassThrough } = require("stream");
-const { Proxyable } = require("../../dist");
+const { TransformStream } = require("node:stream/web");
 
-function createDuplexPair() {
-  const aToB = new PassThrough();
-  const bToA = new PassThrough();
+function createTransportPair() {
+  const clientToServer = new TransformStream();
+  const serverToClient = new TransformStream();
 
-  const a = new Duplex({
-    write(chunk, enc, cb) {
-      aToB.write(chunk, enc, cb);
+  return {
+    client: {
+      readable: serverToClient.readable,
+      writable: clientToServer.writable,
     },
-    read() {},
-  });
-  const b = new Duplex({
-    write(chunk, enc, cb) {
-      bToA.write(chunk, enc, cb);
+    server: {
+      readable: clientToServer.readable,
+      writable: serverToClient.writable,
     },
-    read() {},
-  });
-
-  aToB.on("data", (chunk) => b.push(chunk));
-  bToA.on("data", (chunk) => a.push(chunk));
-  aToB.on("end", () => b.push(null));
-  bToA.on("end", () => a.push(null));
-
-  return { a, b };
+  };
 }
 
 module.exports = {
   name: "proxyables",
   muteOutput: true,
   async setup({ payloadBytes }) {
+    const { Proxyable } = await import("../../dist/index.mjs");
     const payload = "x".repeat(payloadBytes);
     const object = {
       ping() {
@@ -45,19 +36,12 @@ module.exports = {
         return cb("hi");
       },
     };
-    const { a: clientStream, b: serverStream } = createDuplexPair();
-    Proxyable.Export({ object, stream: serverStream });
-    const remote = Proxyable.ImportFrom({ stream: clientStream });
-    return { remote, payload, clientStream, serverStream };
+    const transport = createTransportPair();
+    Proxyable.Export({ object, transport: transport.server });
+    const remote = Proxyable.ImportFrom({ transport: transport.client });
+    return { remote, payload };
   },
-  async teardown(ctx) {
-    try {
-      ctx?.clientStream?.destroy();
-    } catch {}
-    try {
-      ctx?.serverStream?.destroy();
-    } catch {}
-  },
+  async teardown() {},
   scenarios: {
     async callNoArgs(ctx) {
       await ctx.remote.ping();

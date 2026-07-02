@@ -1,5 +1,9 @@
-import { Duplex } from "stream";
-import { Client } from "yamux-js/cjs";
+import {
+  createClient,
+  type ClientOptions,
+  type Session,
+  type Stream,
+} from "@stateforward/yamux.ts";
 import { createDecoder } from "./decoder";
 import {
   createInstructionUnsafe,
@@ -27,14 +31,20 @@ import { make as muid } from "./muid";
 import { ProxyableSymbol } from "./symbol";
 import { logger } from "./logger";
 import { ObjectRegistry } from "./registry";
-import { encode } from "@msgpack/msgpack";
 import { StreamPool } from "./stream_pool";
+import {
+  concatBytes,
+  readEachStreamChunk,
+  readInstructionFromStream,
+  tryDecodeInstruction,
+  writeToStream,
+} from "./transport";
 
 const log = logger.child({ module: "proxyable.imported" });
 const INSPECT_SYMBOL = Symbol.for("nodejs.util.inspect.custom");
 
 type Context = {
-  client: Client;
+  client: Session;
   decoder: ProxyInstructionDecoder["decode"];
   encoder: ProxyInstructionEncoder["encode"];
   registry?: FinalizationRegistry<{ refId: string }>;
@@ -137,22 +147,6 @@ function unwrapArgumentValue(arg: unknown, context: Context): unknown {
   return "data" in wrapped ? wrapped.data : arg;
 }
 
-function tryDecodeInstruction(
-  decoder: ProxyInstructionDecoder["decode"],
-  data: Buffer,
-  kinds: number[]
-): ProxyInstruction | null {
-  try {
-    const [error, instruction] = decoder(data, kinds as any);
-    if (error) {
-      return null;
-    }
-    return instruction as ProxyInstruction;
-  } catch {
-    return null;
-  }
-}
-
 function createProxyCursor<TObject extends object>(
   context: Context,
   instructions: ProxyInstructions[]
@@ -249,8 +243,8 @@ function createProxyCursor<TObject extends object>(
       return createProxyCursor(context, newInstructions);
     },
   };
-  // Expose the underlying client for internal use without widening ProxyHandler typing.
-  (handler as any).stream = context.client;
+  // Expose the underlying Yamux session for internal use without widening ProxyHandler typing.
+  (handler as any).session = context.client;
 
   return new Proxy(object, handler);
 }
@@ -259,142 +253,75 @@ async function executeInstructions(
   context: Context,
   instructions: ProxyInstructions[]
 ): Promise<ProxyExecuteResult> {
-  return new Promise((resolve, reject) => {
-    const { encoder, decoder, streamPool } = context;
-    let substream: Duplex | null = null;
-    let responseBuffer = Buffer.alloc(0);
-
-    // Prepare execution instruction
-    const execInstruction = createInstructionUnsafe(
-      ProxyInstructionKinds.execute,
-      instructions
+  const { encoder, decoder, streamPool } = context;
+  const execInstruction = createInstructionUnsafe(
+    ProxyInstructionKinds.execute,
+    instructions
+  );
+  const substream = await streamPool.acquire();
+  try {
+    const bytes = encoder(execInstruction);
+    log.info(
+      { instruction: execInstruction },
+      `sending ${execInstruction.kind} instruction`
     );
-
-    const cleanup = () => {
-      if (!substream) return;
-      substream.removeAllListeners("data");
-      substream.removeAllListeners("error");
-      streamPool.release(substream);
-      substream = null;
-    };
-
-    const handleData = (data: Buffer | Uint8Array) => {
-      responseBuffer = Buffer.concat([responseBuffer, Buffer.from(data)]);
-      const instruction = tryDecodeInstruction(decoder, responseBuffer, [
-        ProxyInstructionKinds.throw,
-        ProxyInstructionKinds.return,
-        ProxyInstructionKinds.next,
-      ]);
-
-      if (!instruction) {
-        return;
-      }
-
-      cleanup();
-      responseBuffer = Buffer.alloc(0);
-      if (instruction.kind === ProxyInstructionKinds.throw) {
-        resolve([instruction.data as any]);
-        return;
-      }
-      resolve([null, instruction as any]);
-    };
-
-    const handleError = (error: unknown) => {
-      log.error(error);
-      cleanup();
-      reject(error);
-    };
-
-    streamPool
-      .acquire()
-      .then((stream) => {
-        substream = stream;
-        substream.on("data", handleData);
-        substream.on("error", handleError);
-        const bytes = encoder(execInstruction);
-        log.info(
-          { instruction: execInstruction },
-          `sending ${execInstruction.kind} instruction`
-        );
-        substream.write(Buffer.from(bytes));
-      })
-      .catch(handleError);
-  });
+    await writeToStream(substream, bytes);
+    const instruction = await readInstructionFromStream(substream, decoder, [
+      ProxyInstructionKinds.throw,
+      ProxyInstructionKinds.return,
+      ProxyInstructionKinds.next,
+    ]);
+    if (!instruction) {
+      throw new Error("yamux stream closed before response");
+    }
+    if (instruction.kind === ProxyInstructionKinds.throw) {
+      return [instruction.data as any];
+    }
+    return [null, instruction as any];
+  } finally {
+    streamPool.release(substream);
+  }
 }
 
 export function createImportedProxyable<TObject extends object>({
-  stream,
+  transport,
   decoder,
   encoder,
   objectRegistry = new ObjectRegistry(),
   streamPoolSize = 8,
   streamPoolReuse = true,
 }: {
-  stream: Duplex;
+  transport: ClientOptions;
   decoder?: ProxyInstructionDecoder;
   encoder?: ProxyInstructionEncoder;
   objectRegistry?: ObjectRegistry;
   streamPoolSize?: number;
   streamPoolReuse?: boolean;
 }): ProxyableImport<TObject> {
-  const client = new Client();
+  const client = createClient(transport);
   const { decode } = decoder ?? createDecoder();
   const { encode } = encoder ?? createEncoder();
-  let transportClosed = false;
-
-  stream.pipe(client as any).pipe(stream);
-  stream.on("close", () => {
-    transportClosed = true;
-  });
-  stream.on("error", () => {
-    transportClosed = true;
-  });
 
   const registry = new FinalizationRegistry((heldValue: { refId: string }) => {
-     if (transportClosed) {
-         return;
-     }
-     try {
-         const substream = client.open() as any;
-         let responseBuffer = Buffer.alloc(0);
-         const cleanup = () => {
-             substream.removeAllListeners("data");
-             substream.removeAllListeners("error");
-             substream.removeAllListeners("close");
-             substream.destroy();
-         };
-         substream.on("data", (chunk: Buffer | Uint8Array) => {
-             responseBuffer = Buffer.concat([responseBuffer, Buffer.from(chunk)]);
-             const instruction = tryDecodeInstruction(decode, responseBuffer, [
-               ProxyInstructionKinds.throw,
-               ProxyInstructionKinds.return,
-             ]);
-             if (!instruction) {
-               return;
-             }
-             cleanup();
-         });
-         substream.on("error", () => {
-             cleanup();
-         });
-         substream.on("close", () => {
-             cleanup();
-         });
-         const instruction = createReleaseInstruction(heldValue.refId);
-         const bytes = encode(instruction);
-         (substream as any).write(Buffer.from(bytes));
-     } catch(e) {
-         // Swallow finalizer release errors once the transport is going away.
-     }
+     void (async () => {
+       try {
+           const substream = await client.openStream();
+           const instruction = createReleaseInstruction(heldValue.refId);
+           await writeToStream(substream, encode(instruction));
+           await substream.finish();
+       } catch {
+           // Swallow finalizer release errors once the transport is going away.
+       }
+     })();
   });
 
-  const streamPool = new StreamPool({ session: client as any, max: streamPoolSize, reuse: streamPoolReuse });
+  const streamPool = new StreamPool({ session: client, max: streamPoolSize, reuse: streamPoolReuse });
 
   // Handle incoming execution requests (Callbacks)
-  const handleStream = (stream: Duplex) => {
-      let requestBuffer = Buffer.alloc(0);
-      stream.on("data", async (data: Buffer | Uint8Array) => {
-          requestBuffer = Buffer.concat([requestBuffer, Buffer.from(data)]);
+  const handleStream = async (stream: Stream) => {
+      let requestBuffer = new Uint8Array();
+      await readEachStreamChunk(stream, async (data) => {
+          requestBuffer = concatBytes(requestBuffer, data);
           const instruction = tryDecodeInstruction(decode, requestBuffer, [
             ProxyInstructionKinds.execute,
             ProxyInstructionKinds.release,
@@ -403,7 +330,7 @@ export function createImportedProxyable<TObject extends object>({
           if (!instruction) {
               return;
           }
-          requestBuffer = Buffer.alloc(0);
+          requestBuffer = new Uint8Array();
 
           // Evaluate logic (Simplified version of exported.ts handler)
           const execute = async () => {
@@ -484,15 +411,25 @@ export function createImportedProxyable<TObject extends object>({
           try {
               const res = await execute(); // evaluate
               // Encode result
-              stream.write(Buffer.from(encode(res)));
+              await writeToStream(stream, encode(res));
           } catch (e: any) {
-              stream.write(Buffer.from(encode(createThrowInstruction({ message: e.message }))));
+              await writeToStream(stream, encode(createThrowInstruction({ message: e.message })));
           }
       });
   };
 
-  // yamux Client doesn't emit "stream"; it uses the onStream callback on Session.
-  (client as any).onStream = handleStream;
+  void (async () => {
+    for (;;) {
+      try {
+        void handleStream(await client.acceptStream()).catch((error) => {
+          log.error({ error }, "yamux callback stream handler failed");
+        });
+      } catch (error) {
+        log.debug({ error }, "stopped accepting yamux callback streams");
+        return;
+      }
+    }
+  })();
 
   return createProxyCursor<TObject>(
     { client, decoder: decode, encoder: encode, registry, objectRegistry, streamPool },

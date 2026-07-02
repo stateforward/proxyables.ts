@@ -2,13 +2,18 @@ import { defineConfig, Options } from "tsup";
 
 const commonConfig: Options = {
   entry: ["src/index.ts"],
-  format: ["cjs", "esm"],
+  format: ["esm"],
   target: "esnext",
   bundle: true,
   splitting: true,
   treeshake: true,
-  external: ["pino", "ulidx", "@msgpack/msgpack", "yamux-js", "stream", "pino-pretty", "pino-caller"],
+  external: ["pino", "ulidx", "@msgpack/msgpack", "@stateforward/yamux.ts", "pino-pretty", "pino-caller"],
   platform: 'node',
+  outExtension() {
+    return {
+      js: ".mjs",
+    };
+  },
 };
 
 export default defineConfig([

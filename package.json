@@ -1,16 +1,39 @@
 {
   "name": "proxyables",
   "version": "0.0.1",
-  "description": "",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Web Streams-based object proxy RPC over Yamux.",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsup",
-    "test": "NODE_OPTIONS='--expose-gc' vitest",
+    "test": "NODE_OPTIONS='--expose-gc' vitest run",
     "bench": "npm run build && node bench/bench.js"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "StateForward",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stateforward/proxyables.ts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stateforward/proxyables.ts/issues"
+  },
+  "homepage": "https://github.com/stateforward/proxyables.ts#readme",
   "devDependencies": {
     "@node-ipc/node-ipc": "^11.0.3",
     "@sinclair/typebox": "^0.33.17",
@@ -28,8 +51,8 @@
     "workerpool": "^6.4.4"
   },
   "dependencies": {
+    "@stateforward/yamux.ts": "^0.1.1",
     "@msgpack/msgpack": "^3.0.0-beta2",
-    "pino": "^9.5.0",
-    "yamux-js": "github:gabewillen/yamux-js"
+    "pino": "^9.5.0"
   }
 }

@@ -8,3 +8,9 @@ export * from "./proxyable";
 export * from "./registry";
 export * from "./stream_pool";
 export * from "./types";
+export type {
+  ProxyableClientTransport,
+  ProxyableServerTransport,
+  ProxyableSession,
+  ProxyableStream,
+} from "./transport";

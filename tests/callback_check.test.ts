@@ -1,8 +1,8 @@
 import "source-map-support/register";
 import { describe, it, expect } from "vitest";
-import { ProxyableSymbol } from "../src/symbol";
 import { createExportedProxyable } from "../src/exported";
 import { createImportedProxyable } from "../src/imported";
+import { createTransportPair } from "./helpers";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -19,9 +19,10 @@ describe("callback check", () => {
 
     let serverReceivedCb: any;
 
-    const local = createExportedProxyable({ object });
+    const transport = createTransportPair();
+    createExportedProxyable({ object, transport: transport.server });
     const remote = createImportedProxyable<typeof object>({
-        stream: local[ProxyableSymbol.handler].stream as any,
+        transport: transport.client,
     });
 
     // 2. Pass callback

@@ -1,9 +1,11 @@
 import { ProxyableHandler, ProxyableExport } from "./types";
-import { Client, Duplex, Server, Session } from "yamux-js/cjs";
 import { createExportedProxyable } from "./exported";
 import { ProxyableSymbol } from "./symbol";
 import { createImportedProxyable } from "./imported";
-import { logger as log } from "./logger";
+import type {
+  ProxyableClientTransport,
+  ProxyableServerTransport,
+} from "./transport";
 
 export class Proxyable {
   static exports: Record<string, unknown> = {};
@@ -11,29 +13,29 @@ export class Proxyable {
 
   static Export<TObject extends object>({
     object,
-    stream,
+    transport,
     handler,
     schema,
   }: {
     object: TObject;
-    stream?: Duplex;
+    transport: ProxyableServerTransport;
     handler?: ProxyableHandler<TObject>;
     schema?: unknown;
   }): ProxyableExport<TObject> {
-    const proxy = createExportedProxyable<TObject>({ stream: stream as any, object, handler });
+    const proxy = createExportedProxyable<TObject>({ transport, object, handler });
     Proxyable.exports[proxy[ProxyableSymbol.id]] = proxy;
     return proxy;
   }
 
   static ImportFrom<TObject extends object>({
-    stream,
+    transport,
     schema,
   }: {
-    stream: Duplex;
+    transport: ProxyableClientTransport;
     handler?: ProxyableHandler<TObject>;
     schema?: unknown;
   }) {
-    const proxy = createImportedProxyable<TObject>({ stream: stream as any });
+    const proxy = createImportedProxyable<TObject>({ transport });
     Proxyable.imports[proxy[ProxyableSymbol.id]] = proxy;
     return proxy;
   }

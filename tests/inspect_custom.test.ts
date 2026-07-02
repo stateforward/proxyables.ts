@@ -1,9 +1,9 @@
 import "source-map-support/register";
 import { describe, it, expect } from "vitest";
 import { inspect } from "util";
-import { ProxyableSymbol } from "../src/symbol";
 import { createExportedProxyable } from "../src/exported";
 import { createImportedProxyable } from "../src/imported";
+import { createTransportPair } from "./helpers";
 
 describe("custom inspect", () => {
   it("should provide helpful, side-effect free inspection", async () => {
@@ -12,9 +12,10 @@ describe("custom inspect", () => {
       getObj: () => ({ nested: "hi" }),
     };
 
-    const local = createExportedProxyable({ object });
+    const transport = createTransportPair();
+    createExportedProxyable({ object, transport: transport.server });
     const remote = createImportedProxyable<typeof object>({
-      stream: local[ProxyableSymbol.handler].stream as any,
+      transport: transport.client,
     });
 
     expect(inspect(remote)).toBe("ProxyableImport(root)");

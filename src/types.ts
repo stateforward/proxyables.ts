@@ -1,6 +1,5 @@
-import { Duplex } from "stream";
 import { ProxyableSymbol } from "./symbol";
-import { Session } from "yamux-js/cjs";
+import type { Session } from "@stateforward/yamux.ts";
 
 export type ProxyInstruction<
   TKind extends number = number,
@@ -188,7 +187,7 @@ export type ProxyableInstructionHandler<TObject extends object> = {
 
 export type ProxyableHandler<TObject extends object> =
   ProxyableInstructionHandler<TObject> & {
-    stream: Session;
+    session: Session;
     decode: ProxyInstructionDecoder["decode"];
     encode: ProxyInstructionEncoder["encode"];
   } & ProxyHandler<TObject>;

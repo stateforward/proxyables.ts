@@ -30,7 +30,7 @@ Proxyables is optimized for low-latency, high-throughput IPC.
 We replaced standard ULID calls with a custom **MUID** implementation (`src/muid.ts`). This provides 64-bit unique IDs comprising a timestamp, machine ID, and counter. This shift alone resulted in a **4x - 6x improvement** in throughput by removing the bottleneck of string-based ID generation in hot paths.
 
 ### Stream Pooling
-To mitigate the overhead of opening new Yamux streams (SYN packets) for every single property access, we implement a `StreamPool`. It maintains a set of idle `Duplex` streams that are reused for subsequent requests, significantly reducing allocation latency.
+To mitigate the overhead of opening new Yamux streams (SYN packets) for every single property access, we implement a `StreamPool`. It maintains a set of idle `@stateforward/yamux.ts` streams that are reused for subsequent requests, significantly reducing allocation latency.
 
 ## Installation
 
@@ -47,19 +47,18 @@ bun add proxyables
 **Server (Exporting an object):**
 ```typescript
 import { Proxyable } from "proxyables";
-// import { Duplex } from 'stream'; 
 
 const api = {
   echo: (msg: string) => `echo ${msg}`,
   compute: (a: number, b: number) => a + b,
 };
 
-// You just need a Duplex stream (e.g., TCP socket, WebSocket stream, etc.)
-// const stream = ...; 
+// You just need a Web Streams transport.
+// const transport = { readable, writable };
 
-const exported = Proxyable.Export({ 
+const exported = Proxyable.Export({
   object: api, 
-  stream 
+  transport
 });
 ```
 
@@ -67,9 +66,9 @@ const exported = Proxyable.Export({
 ```typescript
 import { Proxyable } from "proxyables";
 
-// const stream = ...;
+// const transport = { readable, writable };
 
-const proxy = Proxyable.ImportFrom({ stream });
+const proxy = Proxyable.ImportFrom({ transport });
 
 // Usage - feels completely local!
 console.log(await proxy.echo("hello")); // "echo hello"
@@ -84,7 +83,7 @@ const exported = Proxyable.Export({
     runWithCallback: (value: string, callback: (message: string) => string) =>
       callback(`received:${value}`),
   },
-  stream,
+  transport,
 });
 
 const callbackResult = await exported.runWithCallback(
@@ -100,7 +99,8 @@ The callback function is automatically registered, assigned an ID, and a proxy r
 
 1.  **Proxy Layer**: Wraps local objects and creates "Cursor" proxies for remote ones.
 2.  **Instruction Protocol**: Operations (get, apply, etc.) are serialized into `ProxyInstructions` using `@msgpack/msgpack`.
-3.  **Transport**: Uses `yamux-js` to multiplex concurrent operations over a single connection (TCP, WebSocket, stdio, etc.).
+<!-- transport dependency from package.json#dependencies and src transport imports -->
+3.  **Transport**: Uses `@stateforward/yamux.ts` to multiplex concurrent operations over a Web Streams transport.
 4.  **Reference Management**: A shared `ObjectRegistry` tracks local objects passed by reference. `FinalizationRegistry` detects when a remote proxy is unused and sends `release` instructions to free memory.
 
 ## License
