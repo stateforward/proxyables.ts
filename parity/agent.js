@@ -4,11 +4,30 @@
 const crypto = require("node:crypto");
 const net = require("node:net");
 const { performance } = require("node:perf_hooks");
-const {
-  createExportedProxyable,
-  createImportedProxyable,
-  ObjectRegistry,
-} = require("../dist/index.js");
+const { Duplex } = require("node:stream");
+
+let createExportedProxyable;
+let createImportedProxyable;
+let ObjectRegistry;
+
+async function loadProxyables() {
+  if (createExportedProxyable) {
+    return;
+  }
+  ({
+    createExportedProxyable,
+    createImportedProxyable,
+    ObjectRegistry,
+  } = await import("../dist/index.mjs"));
+}
+
+function createSocketTransport(socket) {
+  const transport = Duplex.toWeb(socket);
+  return {
+    readable: transport.readable,
+    writable: transport.writable,
+  };
+}
 
 process.on("uncaughtException", (error) => {
   if (String(error && error.message ? error.message : error).toLowerCase().includes("keepalive timeout")) {
@@ -394,7 +413,14 @@ function createServerState() {
   return { registry, fixture };
 }
 
-const serverState = createServerState();
+let serverState;
+
+function getServerState() {
+  if (!serverState) {
+    serverState = createServerState();
+  }
+  return serverState;
+}
 
 async function normalizeResult(scenario, value) {
   if (scenario === "ParityTracePath") {
@@ -463,10 +489,15 @@ function serveReady(port) {
 }
 
 async function handleConn(socket) {
+  const state = getServerState();
   const root = {
-    RunScenario: (...args) => serverState.fixture.RunScenarioOnConnection(socket, ...args),
+    RunScenario: (...args) => state.fixture.RunScenarioOnConnection(socket, ...args),
   };
-  createExportedProxyable({ object: root, stream: socket, registry: serverState.registry });
+  createExportedProxyable({
+    object: root,
+    transport: createSocketTransport(socket),
+    registry: state.registry,
+  });
   return new Promise((resolve) => {
     socket.on("close", () => resolve());
     socket.on("error", () => resolve());
@@ -501,7 +532,11 @@ async function runBridge(args) {
         return normalizeResult(scenario, raw);
       },
     };
-    createExportedProxyable({ object: root, stream: socket, registry: new ObjectRegistry() });
+    createExportedProxyable({
+      object: root,
+      transport: createSocketTransport(socket),
+      registry: new ObjectRegistry(),
+    });
   });
 
   server.listen(0, "127.0.0.1", () => {
@@ -532,10 +567,16 @@ function createConnection(host, port) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host, port: Number(port) });
     const objectRegistry = new ObjectRegistry();
-    const proxy = createImportedProxyable({ stream: socket, objectRegistry, streamPoolReuse: false });
     socket.on("error", () => {});
     socket.once("error", reject);
-    socket.once("connect", () => resolve({ socket, proxy }));
+    socket.once("connect", () => {
+      const proxy = createImportedProxyable({
+        transport: createSocketTransport(socket),
+        objectRegistry,
+        streamPoolReuse: false,
+      });
+      resolve({ socket, proxy });
+    });
   });
 }
 
@@ -795,6 +836,7 @@ async function runBench(args) {
 }
 
 async function main() {
+  await loadProxyables();
   const [, , mode, ...rest] = process.argv;
   const args = {};
   for (let index = 0; index < rest.length; index += 1) {
