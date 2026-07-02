@@ -7,7 +7,7 @@ const commonConfig: Options = {
   bundle: true,
   splitting: true,
   treeshake: true,
-  external: ["pino", "ulidx", "@msgpack/msgpack", "@stateforward/yamux.ts", "pino-pretty", "pino-caller"],
+  external: ["pino", "ulidx", "@msgpack/msgpack", "@stateforward/yamux.ts"],
   platform: 'node',
   outExtension() {
     return {

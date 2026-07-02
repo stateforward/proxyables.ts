@@ -1,6 +1,6 @@
 {
   "name": "@stateforward/proxyables.ts",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Web Streams-based object proxy RPC over Yamux.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.mts",
@@ -43,8 +43,6 @@
     "@types/node": "^22.10.0",
     "@vitest/coverage-v8": "^2.1.9",
     "comlink": "^4.4.1",
-    "pino-caller": "^3.4.0",
-    "pino-pretty": "^11.3.0",
     "rpc-websockets": "^4.1.2",
     "source-map-support": "^0.5.21",
     "threads": "^1.7.0",
@@ -54,8 +52,8 @@
     "workerpool": "^6.4.4"
   },
   "dependencies": {
-    "@stateforward/yamux.ts": "^0.1.1",
     "@msgpack/msgpack": "^3.0.0-beta2",
+    "@stateforward/yamux.ts": "^0.1.1",
     "pino": "^9.5.0"
   }
 }
